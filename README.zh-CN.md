@@ -11,6 +11,8 @@
 需要 Node.js 22.19 或以上，推荐 Node.js 24。
 
 ```sh
+git clone https://github.com/crapthings/loom-code.git
+cd loom-code
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm run demo
 ```

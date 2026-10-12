@@ -13,6 +13,8 @@ Requires Node.js **>=22.19.0** (24 recommended) and **pnpm 12.4.1**.
 After cloning or downloading this repository, run from its root:
 
 ```sh
+git clone https://github.com/crapthings/loom-code.git
+cd loom-code
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm run check
 pnpm add --global "$PWD" --ignore-scripts

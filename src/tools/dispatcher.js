@@ -9,8 +9,8 @@ import { checkpointTool } from './checkpoints.js'
 import { validateMode } from '../core/modes.js'
 
 // createTools assembles built-ins and optional delegation behind one dispatcher-compatible registry.
-export function createTools ({ cwd, session, delegate }) {
-  const tools = [...fileTools(cwd, session), shellTool(cwd, session), checkpointTool(cwd, session), {
+export function createTools ({ cwd, session, delegate, executor }) {
+  const tools = [...fileTools(cwd, session), shellTool(cwd, session, executor), checkpointTool(cwd, session), {
     name: 'read_artifact',
     description: 'Read a stored tool-output artifact by ID with a character offset.',
     effect: 'read',

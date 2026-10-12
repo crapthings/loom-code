@@ -8,6 +8,7 @@ import { TerminalApp } from './ui/app.js'
 import { safeText } from './ui/theme.js'
 import { compatibleModels } from './model/compatible.js'
 import { validateMode } from './core/modes.js'
+import { sandboxStatus } from './execution/executor.js'
 
 // parseOptions validates command-line configuration before opening a session or entering raw mode.
 export function parseOptions (args, env = process.env) {
@@ -22,6 +23,8 @@ export function parseOptions (args, env = process.env) {
       'base-url': { type: 'string' },
       'context-window': { type: 'string', default: '32768' },
       mode: { type: 'string', default: 'ask' },
+      sandbox: { type: 'string', default: 'required' },
+      'sandbox-status': { type: 'boolean', default: false },
       steps: { type: 'string', default: '30' },
       reasoning: { type: 'string', default: 'off' },
       print: { type: 'string' },
@@ -32,6 +35,7 @@ export function parseOptions (args, env = process.env) {
     }
   })
   validateMode(values.mode)
+  if (!['required', 'off'].includes(values.sandbox)) throw new Error('--sandbox must be required or off')
   const steps = Number(values.steps)
   if (!Number.isInteger(steps) || steps < 1 || steps > 500) throw new Error('--steps must be an integer from 1 to 500')
   if (!['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(values.reasoning)) throw new Error('Invalid --reasoning level')
@@ -41,7 +45,7 @@ export function parseOptions (args, env = process.env) {
   const contextWindow = Number(values['context-window'])
   if (!Number.isInteger(contextWindow) || contextWindow < 8192) throw new Error('--context-window must be an integer of at least 8192')
   if (values['base-url'] && !values.model && !env.LOOM_MODEL) throw new Error('--base-url requires an explicit --model')
-  if (!values.demo && !values.help && !values.models && !model) throw new Error('Specify --model for this provider')
+  if (!values.demo && !values.help && !values.models && !values['sandbox-status'] && !model) throw new Error('Specify --model for this provider')
   return { ...values, provider, model, steps, contextWindow }
 }
 
@@ -58,6 +62,8 @@ Usage: loom [options]
   --context-window N       Compatible endpoint context size (default: 32768)
   --models                 List chat models, optionally filtered by provider
   --mode ask|edit|auto|plan Initial permissions; switch with /mode in the TUI
+  --sandbox required|off   Mandatory OS sandbox (default) or explicit host execution
+  --sandbox-status         Check sandbox platform and dependencies without API calls
   --session ID             Reopen a saved workspace session
   --resume                 Explicitly resume interrupted or recovered work
   --steps N                Shared model-call allowance (default: 30)
@@ -71,12 +77,14 @@ API credentials resolve through the selected provider's environment variables.
 Default: Vercel AI Gateway / deepseek/deepseek-v4.1-flash; set AI_GATEWAY_API_KEY.
 LOOM_PROVIDER and LOOM_MODEL override the defaults.
 Shell commands require approval in ask/edit; auto permits host execution without prompts.
+Shell sandbox defaults to required, with network denied and no unsandboxed fallback.
 `
 
 // main builds one runtime for either the terminal interface or the headless event stream.
 export async function main (args = process.argv.slice(2)) {
   const options = parseOptions(args)
   if (options.help) { process.stdout.write(helpText); return }
+  if (options['sandbox-status']) { const status = sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
   if (options.models) { process.stdout.write(`${listModels(args.includes('--provider') ? options.provider : undefined).join('\n')}\n`); return }
   if (!options.demo && !options['base-url'] && options.provider === defaultProvider && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway, or choose --provider / --base-url explicitly')
   const headless = options.print !== undefined || (options.resume && !process.stdin.isTTY)
@@ -90,14 +98,14 @@ export async function main (args = process.argv.slice(2)) {
   let app
   const shutdown = () => app ? app.shutdown().catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1 }) : agent.interrupt()
   try {
-    if (!headless) app = new TerminalApp({ cwd, session, model, mode: options.mode })
+    if (!headless) app = new TerminalApp({ cwd, session, model, mode: options.mode, sandbox: options.sandbox })
     const emit = event => {
       if (app) return app.event(event)
       if (options.json) process.stdout.write(`${JSON.stringify(event)}\n`)
       else if (event.type === 'assistant.end' && !event.child) process.stdout.write(`${safeText(event.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n'))}\n`)
       else if (event.type === 'error') process.stderr.write(`${safeText(event.text)}\n`)
     }
-    agent = new Agent({ cwd, session, model, mode: options.mode, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
+    agent = new Agent({ cwd, session, model, mode: options.mode, sandbox: options.sandbox, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
     app?.bind(agent)
     await agent.initialize()
     process.on('SIGINT', shutdown)

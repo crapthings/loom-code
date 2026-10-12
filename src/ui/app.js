@@ -1,12 +1,14 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView, SelectList, Text, TuiAltScreen, VStack, matchesKey } from '@earendil-works/pi-tui'
 import { colors, editorTheme, markdownTheme, safeText, selectTheme } from './theme.js'
 import { modes } from '../core/modes.js'
+import { sandboxStatus } from '../execution/executor.js'
 
 // commands describes the terminal commands offered by the editor's completion menu.
 const commands = [
   { name: 'help', description: 'Show controls and commands' },
   { name: 'mode', description: 'Switch ask / edit / auto / plan permissions' },
   { name: 'permissions', description: 'Open the permission mode selector' },
+  { name: 'sandbox', description: 'Show execution isolation and dependency status' },
   { name: 'queue', description: 'Queue a task after current work' },
   { name: 'stop', description: 'Interrupt current execution' },
   { name: 'continue', description: 'Resume after inspecting partial or unknown effects' },
@@ -18,7 +20,7 @@ const commands = [
 
 // TerminalApp presents a scrollable transcript, persistent editor, execution status, and cancellable approvals.
 export class TerminalApp {
-  constructor ({ cwd, session, model, mode, terminal = new ProcessTerminal() }) {
+  constructor ({ cwd, session, model, mode, sandbox = 'required', terminal = new ProcessTerminal() }) {
     this.tui = new TuiAltScreen(terminal)
     this.transcript = new Container()
     this.streams = new Map()
@@ -27,8 +29,9 @@ export class TerminalApp {
     this.session = session
     this.model = model
     this.mode = mode
+    this.sandbox = sandbox
     this.cwd = cwd
-    this.header = new Text(`${colors.bold('LOOM CODE')}  ${colors.dim(model.label)}  ${colors.warning(mode)}\n${colors.dim(cwd)}`, 1, 0)
+    this.header = new Text(`${colors.bold('LOOM CODE')}  ${colors.dim(model.label)}  ${colors.warning(mode)} · ${sandbox === 'off' ? colors.warning('UNSANDBOXED HOST') : 'sandbox required'}\n${colors.dim(cwd)}`, 1, 0)
     this.footer = new Text('', 1, 0)
     this.editor = new Editor(this.tui, editorTheme)
     this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, cwd))
@@ -124,7 +127,7 @@ export class TerminalApp {
 
   updateMode (mode) {
     this.mode = mode
-    this.header.setText(`${colors.bold('LOOM CODE')}  ${colors.dim(this.model.label)}  ${colors.warning(`${mode} · ${modes[mode].label}`)}\n${colors.dim(this.cwd)}`)
+    this.header.setText(`${colors.bold('LOOM CODE')}  ${colors.dim(this.model.label)}  ${colors.warning(`${mode} · ${modes[mode].label}`)} · sandbox ${this.sandbox}\n${colors.dim(this.cwd)}`)
     this.add('Permissions', `${mode} · ${modes[mode].description}`)
   }
 
@@ -132,7 +135,7 @@ export class TerminalApp {
     if (this.agent.running) throw new Error('请先用 /stop 停止任务，或等待完成，再切换权限。')
     return new Promise(resolve => {
       const dialog = new Container()
-      dialog.addChild(new Text(`切换权限 · 当前 ${this.agent.mode}\n完全自动模式会直接执行主机命令，无 OS 沙箱。`, 1, 1))
+      dialog.addChild(new Text(`切换权限 · 当前 ${this.agent.mode}\n完全自动模式跳过审批；执行边界：${this.agent.executor.label}。`, 1, 1))
       const choices = new SelectList(Object.entries(modes).map(([value, mode]) => ({ value, label: `${value} · ${mode.label}`, description: mode.description })), 4, selectTheme)
       choices.setSelectedIndex(Object.keys(modes).indexOf(this.agent.mode))
       dialog.addChild(choices)
@@ -157,7 +160,7 @@ export class TerminalApp {
     if (signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
       const dialog = new Container()
-      dialog.addChild(new Text(`${colors.warning(effect === 'shell' ? 'APPROVE HOST SHELL · no OS sandbox' : 'APPROVE WORKSPACE EDIT')}\n${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, 1, 1))
+      dialog.addChild(new Text(`${colors.warning(effect === 'shell' ? `APPROVE SHELL · ${this.agent?.executor.label || this.sandbox}` : 'APPROVE WORKSPACE EDIT')}\n${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, 1, 1))
       const choices = new SelectList([{ value: 'deny', label: 'Deny', description: 'Return refusal to the agent' }, { value: 'allow', label: 'Allow once', description: 'Execute this exact call' }], 2, selectTheme)
       dialog.addChild(choices)
       dialog.handleInput = data => choices.handleInput(data)
@@ -182,6 +185,7 @@ export class TerminalApp {
     if (/^\/(mode|permissions)(\s|$)/.test(text)) return this.switchMode(text.split(/\s+/).slice(1).join(' '))
     if (text === '/exit') return this.shutdown()
     if (text === '/stop') return this.agent.interrupt()
+    if (text === '/sandbox') { this.add('Sandbox', `${this.agent.executor.label}\n${JSON.stringify(sandboxStatus(), null, 2)}\n模型 API 在沙箱外；/mode 不改变隔离边界。`); return }
     if (text === '/continue') return this.agent.resume()
     if (text === '/compact') { await this.agent.compact(); this.add('Context', '压缩完成，原始历史已保留。'); return }
     if (text === '/undo') { await this.agent.undo(); return }

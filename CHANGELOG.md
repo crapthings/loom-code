@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Mandatory native shell isolation using sandbox-runtime 0.0.79: Seatbelt on macOS and bubblewrap on Linux.
+- Default-denied shell networking, protected metadata and credential paths, isolated temporary home/cache, and an environment allowlist.
+- Fail-closed dependency and policy checks, explicit `--sandbox off`, and `/sandbox` diagnostics.
+- Real native filesystem/socket boundary tests and a sandboxed JavaScript coding-and-test loop.
+
 ## 0.1.0 — 2026-10-12
 
 - JavaScript agent loop with steering inputs, queued tasks, shared budgets, and cancellation.

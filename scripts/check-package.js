@@ -26,7 +26,7 @@ async function checkPackage () {
     const archive = path.join(temporary, archives[0])
     const files = run('tar', ['-tzf', archive], root).trim().split('\n')
     for (const file of files) {
-      assert.match(file, /^package\/(?:bin\/|src\/|docs\/architecture\.md$|package\.json$|README(?:\.zh-CN)?\.md$|LICENSE$|NOTICE$)/, `Unexpected packaged file: ${file}`)
+      assert.match(file, /^package\/(?:bin\/|src\/|docs\/(?:architecture|sandbox)\.md$|package\.json$|README(?:\.zh-CN)?\.md$|LICENSE$|NOTICE$)/, `Unexpected packaged file: ${file}`)
       assert.doesNotMatch(file, /(?:^|\/)\.\.(?:\/|$)/)
     }
     for (const required of ['bin/loom.js', 'src/index.js', 'LICENSE', 'NOTICE']) assert.ok(files.includes(`package/${required}`), `Missing ${required}`)

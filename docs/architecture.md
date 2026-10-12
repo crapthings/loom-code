@@ -13,7 +13,7 @@ Agent: 单会话协调、step、预算、取消、委托
        ├── Model: Pi provider 或离线模型
        └── Dispatcher: 校验 → 授权 → 记录意图 → 执行 → 记录结果
                        ├── 文件与版本检查点
-                       ├── 主机 Shell 与输出 artifact
+                       ├── ShellExecutor → OS 沙箱与输出 artifact
                        └── 只读子代理
        │
        ▼
@@ -68,7 +68,7 @@ Budget 独立于消息列表和 compaction。父代理、子代理、摘要与�
 
 ## 接下来的扩展位置
 
-- **OS 沙箱**：把 shell execute 换成受限制的 Executor，明确网络和文件系统策略，保留同一 Dispatcher 授权入口。
+- **执行隔离**：ShellExecutor 已通过 sandbox-runtime 接入 Seatbelt/bubblewrap，默认禁止网络且失败不降级；下一步加入受审计的网络放行、资源限制和容器执行器，见 [sandbox.md](sandbox.md)。
 - **MCP**：将发现的工具转换为 registry 项；schema、授权、取消、输出和日志仍必须走 Dispatcher。
 - **复杂插件**：先决定信任和隔离边界；当前不加载可以直接访问宿主的任意 hooks。
 - **OAuth**：向 Pi Models 注入持久 credential store，登录 UI 与凭据存储分离。

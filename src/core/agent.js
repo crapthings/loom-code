@@ -6,10 +6,11 @@ import { createTools, Dispatcher } from '../tools/dispatcher.js'
 import { discoverSkills, skillTool } from './skills.js'
 import { latestCheckpoint } from '../tools/checkpoints.js'
 import { validateMode } from './modes.js'
+import { ShellExecutor } from '../execution/executor.js'
 
 // Agent coordinates durable input, model steps, tools, and read-only child sessions.
 export class Agent {
-  constructor ({ cwd, session, model, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget }) {
+  constructor ({ cwd, session, model, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget, sandbox = 'required', executor = new ShellExecutor({ cwd, sandbox }) }) {
     this.cwd = cwd
     this.session = session
     this.model = model
@@ -17,6 +18,7 @@ export class Agent {
     this.emit = emit
     this.steps = steps
     this.depth = depth
+    this.executor = executor
     this.sharedBudget = budget
     this.running = null
     this.controller = null
@@ -24,7 +26,7 @@ export class Agent {
     this.closed = false
     this.status = 'idle'
     const delegate = depth === 0 ? (args, context) => this.delegate(args, context) : undefined
-    this.dispatcher = new Dispatcher({ session, mode, approve, emit, tools: createTools({ cwd, session, delegate }) })
+    this.dispatcher = new Dispatcher({ session, mode, approve, emit, tools: createTools({ cwd, session, delegate, executor }) })
   }
 
   async initialize () {
@@ -35,6 +37,8 @@ export class Agent {
     this.dispatcher.tools.push(skillTool(skills))
     this.skillInstructions = skills.length ? `\nAvailable project skills (use load_skill to read instructions):\n${skills.map(skill => `${skill.name}: ${skill.description}`).join('\n')}` : ''
     this.system += this.skillInstructions
+    this.executionInstructions = `\nShell execution: ${this.executor.label}. Sandbox failures are tool errors, never authorization to bypass isolation. Network-denied shell commands cannot install dependencies from the internet. Model requests run outside the shell sandbox.`
+    this.system += this.executionInstructions
     this.emit({ type: 'status', text: this.status })
   }
 
@@ -153,7 +157,7 @@ export class Agent {
       await this.session.append('permission.mode', { previous: this.mode, mode })
       this.mode = mode
       this.dispatcher.mode = mode
-      this.system = system + this.skillInstructions
+      this.system = system + this.skillInstructions + this.executionInstructions
       this.emit({ type: 'mode.changed', mode })
     })
   }

@@ -5,7 +5,7 @@ import path from 'node:path'
 const modeInstructions = {
   ask: 'Ask mode includes read, write_file, edit_file, restore_checkpoint, and shell tools. Writes and shell calls trigger an approval dialog in the harness; call the appropriate tool to request approval instead of claiming you cannot write or asking the user to switch modes.',
   edit: 'Edit mode allows workspace file changes without an approval dialog. Shell calls still trigger explicit host-execution approval.',
-  auto: 'Auto mode allows workspace file changes and host shell execution without approval dialogs. Execute authorized work autonomously; this permission level does not provide an OS sandbox.',
+  auto: 'Auto mode allows workspace file changes and shell execution without approval dialogs. Execute authorized work autonomously; permission modes never disable the configured sandbox.',
   plan: 'Plan mode is read-only: file mutation and shell tools are unavailable and execution is denied. Explain this limit when a task requires changing files.'
 }
 

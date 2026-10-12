@@ -110,9 +110,11 @@ node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --conte
 
 通常直接运行 `loom`，在 TUI 中输入 `/mode` 选择权限，无需退出或重填启动参数。运行中的任务须先用 `/stop` 停止并等待收尾，再切换模式；切换会同步更新模型提示词、可用工具和执行层，并记入会话日志。当前权限仅对本次进程有效，重新启动默认回到 ask；子代理始终保持只读。`/mode auto` 表示授权智能体自动执行文件操作和主机命令。
 
-Shell 是**主机执行**，目前没有 OS 沙箱；ask/edit 需要审批，auto 不弹审批。文件工具的路径校验不能限制任意 Shell 命令，也不防御恶意本地进程同时改动路径。生产中的不可信任务应在隔离环境运行；执行器接口是下一步接入容器或系统沙箱的位置。
+Shell 默认必须进入 OS 沙箱：macOS 使用 Seatbelt，Linux 使用 bubblewrap。ask/edit 需要审批，auto 不弹审批但保留沙箱边界；默认拒绝 shell 网络访问，限制写入工作区与私有临时目录，并保护凭据和元数据。沙箱无法建立时拒绝执行，不自动退回裸机。调研、策略与限制见 [sandbox.md](docs/sandbox.md)。
 
-Shell 最长运行 120 秒，输出超过 10 MiB 时停止；完整输出保存为 artifact，模型得到有限预览。Unix 中断会终止进程组；Windows 的进程树隔离与取消尚未验证。Shell 子进程默认剔除名称包含 API_KEY、TOKEN、SECRET、PASSWORD 的环境变量，避免继承模型认证；依赖这些变量的命令需要另外设计明确的凭据授权。
+`loom --sandbox-status` 或 TUI 的 `/sandbox` 查看依赖状态。Linux 需要 bubblewrap、socat、ripgrep，以及宿主允许创建非特权 namespace。建议先由用户安装项目依赖，再让智能体离线改代码与跑测试；模型 API 请求不受 shell 网络限制。启动时显式传 `--sandbox off` 才使用裸机执行，`/mode` 和模型无法关闭沙箱。
+
+Shell 最长运行 120 秒，输出超过 10 MiB 时停止；完整输出保存为 artifact，模型得到有限预览。Unix 中断会终止进程组；Windows 沙箱尚未接入。Shell 环境从小型白名单构造，不继承模型认证、SSH agent 或可执行启动钩子，HOME、临时目录及缓存均隔离；用户 HOME 下的部分工具链可能不可访问。
 
 ## 会话与恢复
 
@@ -170,6 +172,6 @@ pnpm run check:package
 
 检查包含 Standard Style、顶层声明的一行解释，以及无网络付费调用的行为测试。真实供应商 HTTP 行为没有用付费密钥验收；供应商适配通过 Pi 的 faux provider 验证，OpenAI-compatible HTTP 接口通过本地测试服务验证。
 
-源码借鉴与实现边界见 [architecture.md](docs/architecture.md)。当前重点是可靠的本地编码闭环；MCP 客户端、OAuth 持久认证、可执行插件、分布式协调和 OS 沙箱尚未实现。
+源码借鉴与实现边界见 [architecture.md](docs/architecture.md)。当前重点是可靠的本地编码闭环；MCP 客户端、OAuth 持久认证、可执行插件、分布式协调、容器执行器和沙箱网络放行尚未实现。
 
 贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全边界见 [SECURITY.md](SECURITY.md)，发布步骤见 [releasing.md](docs/releasing.md)。本项目使用 [MIT 许可证](LICENSE)；依赖保留各自许可证，参考 [NOTICE](NOTICE)。

@@ -55,7 +55,9 @@ Enter `/mode` or `/permissions` to open the permission selector. Direct commands
 | `/mode auto` | Automatic | Automatic |
 | `/mode plan` | Denied | Denied |
 
-**Shell commands run on your host; there is no OS sandbox.** Auto mode authorizes execution without approval prompts. File-tool path checks do not restrict shell processes. Read the [security boundaries](SECURITY.md).
+**Shell commands require an OS sandbox by default:** Seatbelt on macOS, bubblewrap on Linux. Auto mode skips approval but keeps the sandbox. Shell network access is denied, writes are limited, and isolation failures never fall back to host execution. See [sandbox design and setup](docs/sandbox.md) and [security boundaries](SECURITY.md).
+
+Use `loom --sandbox-status` or `/sandbox` to inspect dependencies. Linux requires `bubblewrap`, `socat`, and `ripgrep` plus host support for unprivileged namespaces. Install project dependencies yourself before running offline coding tasks. `--sandbox off` explicitly selects unsandboxed host execution; it cannot be enabled by a model or `/mode`. Model API traffic is outside the shell sandbox.
 
 Stop or finish active work before changing permissions. Changes update the instructions, tool declarations, dispatcher, and header together, and are recorded in the session. Restarting defaults to `ask`; delegated agents always remain read-only.
 
@@ -123,6 +125,6 @@ Checks enforce Standard Style, one-sentence comments above top-level declaration
 
 ## Scope and contributing
 
-MCP, persistent OAuth, executable plugins, distributed coordination, and OS sandboxing are not implemented. Help improve the local coding loop first; see [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), and the [release checklist](docs/releasing.md).
+MCP, persistent OAuth, executable plugins, distributed coordination, container executors, and sandbox network allowlists are not implemented. Help improve the local coding loop first; see [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), and the [release checklist](docs/releasing.md).
 
-Loom is licensed under [MIT](LICENSE). Pi dependencies retain their own MIT licenses; see [NOTICE](NOTICE). Architecture research credits Pi, Codex, OpenCode, and publicly documented Claude Code behavior without claiming access to Claude Code's private runtime.
+Loom is licensed under [MIT](LICENSE). Pi dependencies retain their MIT licenses; sandbox-runtime retains its Apache-2.0 license. See [NOTICE](NOTICE). Architecture research credits Pi, Codex, OpenCode, and publicly documented Claude Code behavior without claiming access to Claude Code's private runtime.

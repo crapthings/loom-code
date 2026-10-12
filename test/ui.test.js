@@ -103,4 +103,7 @@ test('CLI validates budgets, modes, and non-default providers', () => {
   assert.throws(() => parseOptions(['--mode', 'unsafe']), /mode/)
   assert.throws(() => parseOptions(['--provider', 'google']), /Specify --model/)
   assert.equal(parseOptions(['--demo', '--mode', 'plan']).demo, true)
+  assert.equal(parseOptions(['--mode', 'auto']).sandbox, 'required')
+  assert.equal(parseOptions(['--sandbox', 'off']).sandbox, 'off')
+  assert.throws(() => parseOptions(['--sandbox', 'best-effort']), /sandbox/)
 })

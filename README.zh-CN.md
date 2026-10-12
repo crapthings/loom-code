@@ -1,10 +1,12 @@
 # Loom Code
 
+[![CI](https://github.com/crapthings/loom-code/actions/workflows/ci.yml/badge.svg)](https://github.com/crapthings/loom-code/actions/workflows/ci.yml)
+
 [English](README.md) | 中文
 
 一个用 ESM JavaScript 编写、遵循 Standard Style 的终端编码智能体。TUI 和模型协议复用 Pi 的成熟基础设施，会话、预算、工具授权与多代理编排由本项目实现。
 
-当前为早期 0.1 版本，通过 GitHub 源码安装，尚未发布到 npm。macOS 已完成本地验证；CI 配置覆盖 Linux/macOS，Windows 暂未验证。
+当前为早期 0.1 版本，通过 GitHub 源码安装，尚未发布到 npm。macOS 已完成本地终端验证；Linux/macOS、Node.js 22.19.0/24 四组 CI 均已通过，Windows 暂未验证。
 
 ## 启动
 

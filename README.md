@@ -1,10 +1,12 @@
 # Loom Code
 
+[![CI](https://github.com/crapthings/loom-code/actions/workflows/ci.yml/badge.svg)](https://github.com/crapthings/loom-code/actions/workflows/ci.yml)
+
 English | [中文](README.zh-CN.md)
 
 A local coding agent with a terminal UI, written in ESM JavaScript with Standard Style. Loom implements its own agent loop, tool dispatcher, durable sessions, permissions, cancellation, and read-only delegation. Model protocols and terminal components come from Pi.
 
-**Early 0.1 release.** Install from source; this package is not published to npm. Local validation has been performed on macOS. CI is configured for Linux and macOS; Windows is not yet validated.
+**Early 0.1 release.** Install from source; this package is not published to npm. Local terminal validation has been performed on macOS; automated checks pass on Linux and macOS with Node.js 22.19.0 and 24. Windows is not yet validated.
 
 ## Install from source
 
@@ -117,7 +119,7 @@ Headless mode denies calls requiring interactive approval. `--mode edit` permits
 
 `src/index.js` exports the reusable Agent, Session, Dispatcher, and model factories. Initialize the agent before enqueueing work, wait for completion, and always close it. The same core powers the TUI and headless CLI.
 
-Checks enforce Standard Style, one-sentence comments above top-level declarations, behavioral tests with fake providers/local HTTP servers, and a packed-CLI smoke test. Paid-provider acceptance is separate; automated checks never require model credentials. GitHub CI execution will be verified after publication.
+Checks enforce Standard Style, one-sentence comments above top-level declarations, behavioral tests with fake providers/local HTTP servers, and a packed-CLI smoke test. Paid-provider acceptance is separate; automated checks never require model credentials. Results are available in [GitHub Actions](https://github.com/crapthings/loom-code/actions/workflows/ci.yml).
 
 ## Scope and contributing
 

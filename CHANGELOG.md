@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — Unreleased
+## 0.1.0 — 2026-10-12
 
 - JavaScript agent loop with steering inputs, queued tasks, shared budgets, and cancellation.
 - Durable JSONL sessions, interrupted-call recovery, and explicit handling of unknown effects.

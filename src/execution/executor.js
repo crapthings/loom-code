@@ -76,6 +76,7 @@ export class ShellExecutor {
       if (!['darwin', 'linux'].includes(process.platform)) throw new Error('Sandbox unavailable: only macOS and Linux are supported; no host fallback')
       const cwd = await realpath(this.cwd)
       const policy = { ...sandboxPolicy(cwd, scratch), ...sandboxHelpers() }
+      if (policy.seccomp) policy.filesystem.allowRead.push({ path: policy.seccomp.applyPath, literal: true })
       if (this.manager.updateConfig) {
         initialized = true
         this.manager.updateConfig(policy)

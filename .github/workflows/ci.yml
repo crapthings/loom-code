@@ -33,6 +33,22 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep
+      - name: Permit sandbox user namespaces on Ubuntu runners
+        if: runner.os == 'Linux'
+        run: |
+          cat > /tmp/loom-sandbox.apparmor <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile loom-bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          profile loom-seccomp /**/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/*/apply-seccomp flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /tmp/loom-sandbox.apparmor
       - run: pnpm run check
       - run: pnpm run check:package

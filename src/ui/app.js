@@ -185,7 +185,7 @@ export class TerminalApp {
     if (/^\/(mode|permissions)(\s|$)/.test(text)) return this.switchMode(text.split(/\s+/).slice(1).join(' '))
     if (text === '/exit') return this.shutdown()
     if (text === '/stop') return this.agent.interrupt()
-    if (text === '/sandbox') { this.add('Sandbox', `${this.agent.executor.label}\n${JSON.stringify(sandboxStatus(), null, 2)}\n模型 API 在沙箱外；/mode 不改变隔离边界。`); return }
+    if (text === '/sandbox') { this.add('Sandbox', `${this.agent.executor.label}\n${JSON.stringify(await sandboxStatus(), null, 2)}\n模型 API 在沙箱外；/mode 不改变隔离边界。`); return }
     if (text === '/continue') return this.agent.resume()
     if (text === '/compact') { await this.agent.compact(); this.add('Context', '压缩完成，原始历史已保留。'); return }
     if (text === '/undo') { await this.agent.undo(); return }

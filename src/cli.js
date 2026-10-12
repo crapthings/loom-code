@@ -84,7 +84,7 @@ Shell sandbox defaults to required, with network denied and no unsandboxed fallb
 export async function main (args = process.argv.slice(2)) {
   const options = parseOptions(args)
   if (options.help) { process.stdout.write(helpText); return }
-  if (options['sandbox-status']) { const status = sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
+  if (options['sandbox-status']) { const status = await sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
   if (options.models) { process.stdout.write(`${listModels(args.includes('--provider') ? options.provider : undefined).join('\n')}\n`); return }
   if (!options.demo && !options['base-url'] && options.provider === defaultProvider && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway, or choose --provider / --base-url explicitly')
   const headless = options.print !== undefined || (options.resume && !process.stdin.isTTY)

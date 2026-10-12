@@ -27,6 +27,7 @@ Docker/容器可作为后续 Executor，但不能直接挂载整个 HOME、Docke
 - 读取：限制 HOME、其他用户目录及通用临时目录，重新开放工作区、当前调用临时目录和 Node 可执行文件目录；系统运行时文件仍可读取，不能称为严格的工作区读取白名单。
 - 网络：shell 的外部域名、直接 TCP、Unix socket 和本地监听均不开放。运行时内部的拒绝代理是必要基础设施；没有用户网络放行配置。
 - 环境：从小型变量白名单构造，使用临时 HOME、TMPDIR 和缓存；不继承 API 密钥、数据库 URL、SSH agent、Node/shell 启动钩子与动态加载环境变量。
+- 启动辅助程序：Linux 的 bubblewrap、socat 和 ripgrep 仅从固定系统目录查找，seccomp 使用固定依赖内的二进制；不从项目或用户传入的 PATH 查找沙箱辅助程序。
 - 文件工具：独立禁止越界、符号链接跳出、常见凭据文件与元数据访问；不因为 shell 有沙箱就省略这些检查。`.env.example` 可以通过文件工具读取。
 - 生命周期：进程组取消、超时、输出上限、终态配对继续生效；退出后清理运行时、临时目录和进程组。进程全局的 SandboxManager 在多个 SDK Agent 间串行使用，防止一个调用重置另一个调用的策略。
 
@@ -47,6 +48,8 @@ sudo apt-get install bubblewrap socat ripgrep
 ```
 
 不支持的宿主或外层限制可能仍使沙箱启动失败。依赖检查只证明组件存在，不证明宿主一定允许执行；真正的工具执行才验证启动能力。不能用 `--sandbox off` 作为自动兼容路径。
+
+Ubuntu 的 AppArmor 非特权 user namespace 限制可能导致 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`，即使依赖检查通过。宿主管理员需要审阅针对 bubblewrap 与运行时 seccomp helper 的 `userns` AppArmor 配置；Loom 不自动修改系统策略，也不关闭网络隔离以绕过该错误。CI 在临时 Ubuntu runner 上为这两个可执行文件加载定向配置，没有全局关闭 AppArmor。[同类兼容问题记录](https://github.com/openai/codex/issues/15057)。
 
 默认网络关闭，联网安装依赖、git push、浏览器登录、依赖本机服务的测试会失败。先由用户在自己的终端准备依赖，再让智能体执行离线编辑与测试。隔离 HOME 意味着个性化 shell 初始化、用户全局缓存和部分 HOME 下的工具链不可访问。
 

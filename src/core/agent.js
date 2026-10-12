@@ -73,7 +73,7 @@ export class Agent {
   async drain (signal) {
     this.status = 'running'
     const runId = randomUUID()
-    await this.session.append('run.started', { runId, model: this.model.label, mode: this.mode })
+    await this.session.append('run.started', { runId, model: this.model.label, mode: this.mode, execution: this.executor.label })
     this.emit({ type: 'status', text: this.status })
     try {
       let continuing = false

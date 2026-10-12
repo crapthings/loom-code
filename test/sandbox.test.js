@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createServer } from 'node:net'
-import { ShellExecutor } from '../src/execution/executor.js'
+import { ShellExecutor, sandboxStatus } from '../src/execution/executor.js'
 import { shellEnvironment } from '../src/execution/policy.js'
 import { createTools, Dispatcher } from '../src/tools/dispatcher.js'
 import { agentFixture, call, fixture, response } from './helpers.js'
@@ -105,6 +105,26 @@ test('shell environment omits credentials and executable startup hooks by constr
   const env = shellEnvironment('/temporary/example')
   for (const key of ['AI_GATEWAY_API_KEY', 'DATABASE_URL', 'SSH_AUTH_SOCK', 'NODE_OPTIONS', 'BASH_ENV', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES']) assert.equal(env[key], undefined)
   assert.equal(env.HOME, '/temporary/example')
+})
+
+test('Linux sandbox preparation never executes helpers from a project-controlled PATH', { skip: process.platform !== 'linux' }, async t => {
+  const { cwd, session } = await fixture(t)
+  const marker = path.join(cwd, 'helper-executed')
+  for (const name of ['bwrap', 'socat', 'rg', 'npm']) {
+    const helper = path.join(cwd, name)
+    await writeFile(helper, `#!/bin/sh\n/usr/bin/touch ${quote(marker)}\nexit 1\n`)
+    await chmod(helper, 0o755)
+  }
+  const original = process.env.PATH
+  process.env.PATH = `${cwd}:${original}`
+  t.after(() => { process.env.PATH = original })
+  const status = await sandboxStatus()
+  assert.deepEqual(status.errors, [])
+  assert.deepEqual(status.warnings, [])
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'auto' })
+  const result = await execute(dispatcher, "console.log('trusted helpers')")
+  assert.equal(result.isError, false, result.content[0].text)
+  await assert.rejects(readFile(marker), { code: 'ENOENT' })
 })
 
 test('file tools also reject credentials instead of relying on the shell sandbox', async t => {

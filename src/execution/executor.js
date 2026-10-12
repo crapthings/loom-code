@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { sandboxPolicy, shellEnvironment } from './policy.js'
+import { sandboxHelpers } from './helpers.js'
 
 // tail serializes access to the runtime's process-global sandbox manager across SDK agents.
 let tail = Promise.resolve()
@@ -31,9 +32,18 @@ async function acquire (signal) {
 }
 
 // sandboxStatus reports platform support and dependencies without running a model or shell task.
-export function sandboxStatus () {
+export async function sandboxStatus () {
   if (!['darwin', 'linux'].includes(process.platform)) return { backend: 'unsupported', errors: ['Loom sandbox supports macOS and Linux only'], warnings: [] }
-  return { backend: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap', ...SandboxManager.checkDependencies() }
+  const backend = process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap'
+  const release = await acquire(new AbortController().signal)
+  try {
+    SandboxManager.updateConfig({ ...sandboxPolicy(process.cwd(), tmpdir()), ...sandboxHelpers() })
+    return { backend, ...SandboxManager.checkDependencies() }
+  } catch (error) {
+    return { backend, errors: [error.message], warnings: [] }
+  } finally {
+    try { await SandboxManager.reset() } finally { release() }
+  }
 }
 
 // ShellExecutor prepares mandatory OS isolation or an explicitly selected unsandboxed launch with no fallback.
@@ -64,11 +74,16 @@ export class ShellExecutor {
       const env = shellEnvironment(scratch)
       if (this.sandbox === 'off') return { command: '/bin/bash', args: ['--noprofile', '--norc', '-c', command], env, cleanup, label: this.label }
       if (!['darwin', 'linux'].includes(process.platform)) throw new Error('Sandbox unavailable: only macOS and Linux are supported; no host fallback')
+      const cwd = await realpath(this.cwd)
+      const policy = { ...sandboxPolicy(cwd, scratch), ...sandboxHelpers() }
+      if (this.manager.updateConfig) {
+        initialized = true
+        this.manager.updateConfig(policy)
+      }
       const dependencies = this.manager.checkDependencies()
       if (dependencies.errors.length || dependencies.warnings.length) throw new Error(`Sandbox dependencies unavailable or degraded: ${[...dependencies.errors, ...dependencies.warnings].join('; ')}; no host fallback`)
-      const cwd = await realpath(this.cwd)
       initialized = true
-      await this.manager.initialize(sandboxPolicy(cwd, scratch), undefined, false)
+      await this.manager.initialize(policy, undefined, false)
       signal.throwIfAborted()
       const prefix = `export TMPDIR='${scratch.replace(/'/g, "'\\''")}'\n`
       const result = await this.manager.wrapWithSandboxArgv(prefix + command, '/bin/bash', undefined, signal, cwd, { commandId: randomUUID(), commandText: command })

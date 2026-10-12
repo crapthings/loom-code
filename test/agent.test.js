@@ -46,7 +46,7 @@ test('ask mode preserves an approval denial without creating the requested file'
 })
 
 test('auto mode executes file and shell tools without approval and still confines file paths', async t => {
-  const { agent, cwd, session } = await agentFixture(t, [response([call('write_file', { path: 'automatic.txt', content: 'done' }), call('shell', { command: 'node -e "process.stdout.write(123)"' }, 'shell-auto')], 'toolUse'), response('Done')], {
+  const { agent, cwd, session } = await agentFixture(t, [response([call('write_file', { path: 'automatic.txt', content: 'done' }), call('shell', { command: 'node -e "console.log(123)"' }, 'shell-auto')], 'toolUse'), response('Done')], {
     mode: 'auto', approve: async () => { throw new Error('Auto mode must not prompt') }
   })
   await agent.enqueue('Create and verify a file')
@@ -54,6 +54,9 @@ test('auto mode executes file and shell tools without approval and still confine
   assert.equal(agent.status, 'idle')
   assert.equal(await readFile(path.join(cwd, 'automatic.txt'), 'utf8'), 'done')
   assert.equal(session.events.some(event => event.type === 'permission.decided'), false)
+  const shellResult = session.events.find(event => event.type === 'tool.finished' && event.message?.toolCallId === 'shell-auto')
+  assert.equal(shellResult.message.isError, false, JSON.stringify(shellResult.message.content))
+  assert.match(shellResult.message.content[0].text, /123/)
   const denied = await agent.dispatcher.run(call('write_file', { path: '../escape.txt', content: 'bad' }), new AbortController().signal)
   assert.equal(denied.isError, true)
 })

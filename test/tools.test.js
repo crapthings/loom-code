@@ -69,13 +69,14 @@ test('cancellation settles every call in a sequential batch and kills a running 
   const { cwd, session } = await fixture(t)
   const controller = new AbortController()
   const started = deferred()
-  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), approve: async () => true, emit: event => { if (event.type === 'tool.progress') started.resolve() } })
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), approve: async () => true, emit: event => { if (event.type === 'tool.progress' && /process \d+ started/.test(event.text)) started.resolve() } })
   const pending = dispatcher.batch([call('shell', { command: 'sleep 60' }), call('list_files', {}, 'second')], controller.signal)
-  await started.promise
+  await Promise.race([started.promise, pending.then(() => { throw new Error('Shell finished before starting a sandboxed process') })])
   controller.abort()
   const results = await pending
   assert.equal(results.length, 2)
   assert.ok(results.every(result => result.isError))
+  assert.match(results[0].content[0].text, /status: cancelled/)
   assert.equal(session.events.filter(event => event.type === 'tool.finished').length, 2)
 })
 

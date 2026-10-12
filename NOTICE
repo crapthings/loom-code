@@ -1,0 +1,9 @@
+Loom Code uses @earendil-works/pi-ai and @earendil-works/pi-tui, both
+licensed under the MIT License and authored by Mario Zechner and contributors.
+Their licenses remain applicable to those dependencies.
+
+Architecture research also consulted Pi, OpenAI Codex, OpenCode, and publicly
+documented Claude Code behavior. Loom's orchestration core is implemented here;
+Claude Code's private runtime was not inspected or incorporated.
+
+See docs/architecture.md for the sources and implementation boundaries.

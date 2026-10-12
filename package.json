@@ -1,0 +1,27 @@
+{
+  "name": "loom-code",
+  "version": "0.1.0",
+  "description": "A durable JavaScript coding agent with a terminal UI",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "exports": "./src/index.js",
+  "files": ["bin/", "src/", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "docs/architecture.md"],
+  "keywords": ["coding-agent", "cli", "tui", "agent", "javascript"],
+  "packageManager": "pnpm@12.4.1",
+  "bin": { "loom": "bin/loom.js" },
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "start": "node bin/loom.js",
+    "demo": "node bin/loom.js --demo",
+    "lint": "node scripts/lint.js",
+    "test": "node --test test/*.test.js",
+    "check": "pnpm run lint && pnpm test",
+    "check:package": "node scripts/check-package.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0"
+  },
+  "devDependencies": { "standard": "17.1.2" }
+}

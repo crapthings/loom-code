@@ -3,7 +3,9 @@ import { colors, editorTheme, markdownTheme, safeText, selectTheme } from './the
 import { modes } from '../core/modes.js'
 import { sandboxStatus } from '../execution/executor.js'
 import { SelectionDialog, dialogOptions } from './dialog.js'
-import { catalogs, translate, validateLanguage } from './i18n.js'
+import { catalogs, translate } from './i18n.js'
+import { createUiStore } from './store.js'
+import { randomUUID } from 'node:crypto'
 
 // commands describes the terminal commands offered by the editor's completion menu.
 const commands = ['help', 'mode', 'permissions', 'language', 'lang', 'sandbox', 'queue', 'stop', 'continue', 'compact', 'undo', 'status', 'exit']
@@ -11,22 +13,22 @@ const commands = ['help', 'mode', 'permissions', 'language', 'lang', 'sandbox', 
 // TerminalApp presents a scrollable transcript, persistent editor, execution status, and cancellable approvals.
 export class TerminalApp {
   constructor ({ cwd, session, model, mode, sandbox = 'required', language = 'en', saveLanguage = async () => {}, terminal = new ProcessTerminal() }) {
-    this.language = validateLanguage(language)
+    this.store = createUiStore({ language, mode })
     this.saveLanguage = saveLanguage
     this.tui = new TuiAltScreen(terminal)
     this.transcript = new Container()
-    this.streams = new Map()
-    this.queued = new Map()
+    this.streamComponents = new Map()
+    this.queuedComponents = new Map()
     this.commandTail = Promise.resolve()
     this.session = session
     this.model = model
-    this.mode = mode
     this.sandbox = sandbox
     this.cwd = cwd
     this.header = new Text('', 1, 0)
     this.footer = new Text('', 1, 0)
     this.editor = new Editor(this.tui, editorTheme)
-    this.refreshLanguage()
+    this.unsubscribe = this.store.subscribe((state, previous) => this.renderState(state, previous))
+    this.renderState(this.store.getState())
     this.editor.onSubmit = text => {
       this.editor.setText('')
       this.editor.addToHistory(text)
@@ -57,6 +59,12 @@ export class TerminalApp {
     this.agent = agent
   }
 
+  get language () { return this.store.getState().language }
+
+  get mode () { return this.store.getState().mode }
+
+  get closing () { return this.store.getState().closing }
+
   t (key, values) { return translate(this.language, key, values) }
 
   commandList () { return commands.map(name => ({ name, description: this.t(`command.${name}`) })) }
@@ -67,10 +75,21 @@ export class TerminalApp {
 
   statusLabel (status) { return Object.hasOwn(catalogs.en, `status.${status}`) ? this.t(`status.${status}`) : status }
 
-  refreshLanguage () {
-    this.header.setText(`${colors.bold('LOOM CODE')}  ${colors.dim(this.model.label)}  ${colors.warning(`${this.mode} · ${this.t(`mode.${this.mode}.label`)}`)} · ${this.sandbox === 'off' ? colors.warning(this.t('sandbox.off')) : this.t('sandbox.required')}\n${colors.dim(this.cwd)}`)
-    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(this.commandList(), this.cwd))
-    this.refreshStatus(this.lastStatus || 'idle', this.lastBudget)
+  renderState (state, previous = {}) {
+    if (state.language !== previous.language || state.mode !== previous.mode) {
+      this.header.setText(`${colors.bold('LOOM CODE')}  ${colors.dim(this.model.label)}  ${colors.warning(`${state.mode} · ${this.t(`mode.${state.mode}.label`)}`)} · ${this.sandbox === 'off' ? colors.warning(this.t('sandbox.off')) : this.t('sandbox.required')}\n${colors.dim(this.cwd)}`)
+    }
+    if (state.language !== previous.language) this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(this.commandList(), this.cwd))
+    if (state.language !== previous.language || state.status !== previous.status || state.budget !== previous.budget) this.renderStatus(state)
+    if (state.streams !== previous.streams) {
+      for (const [stepId, text] of state.streams) {
+        if (text !== previous.streams?.get(stepId)) this.streamComponents.get(stepId)?.setText(safeText(text))
+      }
+      for (const stepId of previous.streams?.keys() || []) {
+        if (!state.streams.has(stepId)) this.streamComponents.delete(stepId)
+      }
+    }
+    this.tui.requestRender()
   }
 
   start () {
@@ -101,45 +120,39 @@ export class TerminalApp {
     }
     if (event.type === 'mode.changed') this.updateMode(event.mode)
     if (event.type === 'permission.granted') this.add(this.t('label.permissions'), this.t('grant.notice', { tool: event.tool }))
-    if (event.type === 'queued') this.queued.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
+    if (event.type === 'queued') this.queuedComponents.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
     if (event.type === 'user') {
-      const component = this.queued.get(event.inputId)
-      if (component) { component.setText(`${colors.accent(this.t('label.you'))}\n${safeText(event.text)}`); this.queued.delete(event.inputId) } else this.add(this.t('label.you'), event.text)
+      const component = this.queuedComponents.get(event.inputId)
+      if (component) { component.setText(`${colors.accent(this.t('label.you'))}\n${safeText(event.text)}`); this.queuedComponents.delete(event.inputId) } else this.add(this.t('label.you'), event.text)
     }
     if (event.type === 'assistant.start') {
       const component = new Markdown('', 1, 1, markdownTheme)
       this.transcript.addChild(component)
-      this.streams.set(event.stepId, { component, text: '' })
-    }
-    if (event.type === 'assistant.delta') {
-      const stream = this.streams.get(event.stepId)
-      if (stream) { stream.text += event.text; stream.component.setText(safeText(stream.text)) }
+      this.streamComponents.set(event.stepId, component)
     }
     if (event.type === 'assistant.end') {
-      const stream = this.streams.get(event.stepId)
-      stream?.component.setText(safeText(event.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')))
-      this.streams.delete(event.stepId)
+      this.streamComponents.get(event.stepId)?.setText(safeText(event.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')))
       this.refreshStatus(this.agent.status, event.budget)
     }
     if (event.type === 'tool.start') this.add(this.t('tool.start', { name: event.call.name }), JSON.stringify(event.call.arguments))
     if (event.type === 'tool.end') this.add(this.t(event.result.isError ? 'tool.failed' : 'tool.completed'), event.result.text.slice(0, 2500))
-    if (event.type === 'tool.progress') this.refreshStatus(event.kind === 'process.started' ? event : event.text)
     if (event.type === 'error') this.add(this.t('label.stopped'), `${event.text}\n${this.t('error.resume')}`)
-    if (event.type === 'status') this.refreshStatus(event.text, event.budget)
+    this.store.dispatch({ ...event, budget: event.budget || this.agent?.budget })
     this.tui.requestRender()
   }
 
   refreshStatus (status, budget = this.agent?.budget) {
-    this.lastStatus = status
-    this.lastBudget = budget
+    this.store.dispatch({ type: 'ui.status', status, budget })
+  }
+
+  renderStatus ({ status, budget }) {
     const label = typeof status === 'object' ? this.t('status.process', { boundary: this.executionLabel(status.boundary), pid: status.pid }) : this.statusLabel(status)
     this.footer.setText(colors.dim(`${this.t('status.footer', { status: label, session: this.session.id.slice(0, 8), calls: budget?.calls || 0, tokens: budget?.tokens || 0, cost: `$${(budget?.cost || 0).toFixed(4)}` })}\n${this.t('status.controls')}`))
     this.tui.requestRender()
   }
 
   updateMode (mode) {
-    this.mode = mode
-    this.refreshLanguage()
+    this.store.dispatch({ type: 'mode.changed', mode })
     this.add(this.t('label.permissions'), `${mode} · ${this.t(`mode.${mode}.description`)}`)
   }
 
@@ -149,7 +162,7 @@ export class TerminalApp {
       const choices = new SelectList(Object.keys(modes).map(value => ({ value, label: `${value} · ${this.t(`mode.${value}.label`)}`, description: this.t(`mode.${value}.description`) })), 4, selectTheme)
       choices.setSelectedIndex(Object.keys(modes).indexOf(this.agent.mode))
       const dialog = new SelectionDialog({ title: colors.warning(this.t('mode.title', { mode: this.agent.mode })), preview: this.t('mode.preview', { boundary: this.executionLabel() }), choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
-      const overlay = this.tui.showOverlay(dialog, dialogOptions)
+      const overlay = this.showDialog('mode', dialog)
       const finish = mode => { overlay.hide(); this.modeMenuCancel = null; this.tui.requestRender(); resolve(mode) }
       choices.onSelect = item => finish(item.value)
       choices.onCancel = () => finish(undefined)
@@ -170,7 +183,7 @@ export class TerminalApp {
       const choices = new SelectList(Object.keys(catalogs).map(value => ({ value, label: this.t(`language.${value}`), description: this.t(`language.${value}.description`) })), 2, selectTheme)
       choices.setSelectedIndex(Object.keys(catalogs).indexOf(this.language))
       const dialog = new SelectionDialog({ title: colors.warning(this.t('language.title')), preview: this.t('language.preview'), choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
-      const overlay = this.tui.showOverlay(dialog, dialogOptions)
+      const overlay = this.showDialog('language', dialog)
       const finish = language => { overlay.hide(); this.languageMenuCancel = null; this.tui.requestRender(); resolve(language) }
       choices.onSelect = item => finish(item.value)
       choices.onCancel = () => finish(undefined)
@@ -184,8 +197,7 @@ export class TerminalApp {
     if (!language || this.closing) return
     if (!Object.hasOwn(catalogs, language)) throw new Error(this.t('language.invalid'))
     await this.saveLanguage(language)
-    this.language = language
-    this.refreshLanguage()
+    this.store.dispatch({ type: 'ui.language', language })
     this.add(this.t('label.language'), this.t('language.changed', { language: this.t(`language.${language}`) }))
   }
 
@@ -199,7 +211,7 @@ export class TerminalApp {
       ], 3, selectTheme, { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 24 })
       const title = colors.warning(this.t(effect === 'shell' ? 'approval.shell' : 'approval.write', { boundary: this.executionLabel() }))
       const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
-      const overlay = this.tui.showOverlay(dialog, dialogOptions)
+      const overlay = this.showDialog('approval', dialog, { callId: call.id, effect })
       const finish = allowed => {
         signal.removeEventListener('abort', abort)
         overlay.hide()
@@ -212,6 +224,21 @@ export class TerminalApp {
       signal.addEventListener('abort', abort, { once: true })
       this.tui.requestRender()
     })
+  }
+
+  showDialog (kind, dialog, metadata = {}) {
+    const overlay = this.tui.showOverlay(dialog, dialogOptions)
+    const id = randomUUID()
+    this.store.dispatch({ type: 'ui.dialog.opened', dialog: { id, kind, ...metadata } })
+    let hidden = false
+    return {
+      hide: () => {
+        if (hidden) return
+        hidden = true
+        overlay.hide()
+        this.store.dispatch({ type: 'ui.dialog.closed', id })
+      }
+    }
   }
 
   async submit (input) {
@@ -234,7 +261,7 @@ export class TerminalApp {
 
   async shutdown () {
     if (this.closing) return
-    this.closing = true
+    this.store.dispatch({ type: 'ui.closing' })
     this.modeMenuCancel?.()
     this.languageMenuCancel?.()
     try {
@@ -243,6 +270,10 @@ export class TerminalApp {
       process.stderr.write(`${safeText(error.message)}\n`)
       process.exitCode = 1
     } finally {
+      this.unsubscribe()
+      this.store.dispatch({ type: 'ui.closed' })
+      this.streamComponents.clear()
+      this.queuedComponents.clear()
       this.tui.stop()
       this.onClose?.()
     }

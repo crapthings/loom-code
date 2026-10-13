@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Per-app Zustand vanilla view-state stores with immutable event projections, copied budget counters, scoped rendering, and subscription cleanup.
 - English-default UI with centralized English/Chinese catalogs, `/language` / `/lang`, and atomic user-level language preferences.
 - Centered framed permission dialogs with visible choices on narrow screens and per-tool approval grants for the current run.
 - Mandatory native shell isolation using sandbox-runtime 0.0.79: Seatbelt on macOS and bubblewrap on Linux.

@@ -117,6 +117,39 @@ test('TUI editor submissions run through the real command and input admission pa
   assert.equal(app.editor.getText(), '')
 })
 
+test('streaming updates the message without rebuilding header or completion and final output settles transient state', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal() })
+  app.bind(agent)
+  t.after(() => app.tui.stop())
+  let headers = 0
+  let completions = 0
+  const setHeader = app.header.setText.bind(app.header)
+  const setAutocomplete = app.editor.setAutocompleteProvider.bind(app.editor)
+  app.header.setText = text => { headers++; setHeader(text) }
+  app.editor.setAutocompleteProvider = provider => { completions++; setAutocomplete(provider) }
+  app.event({ type: 'queued', inputId: 'input', text: 'task', delivery: 'steer' })
+  app.event({ type: 'user', inputId: 'input', text: 'task' })
+  app.event({ type: 'assistant.start', stepId: 'stream' })
+  app.event({ type: 'assistant.delta', stepId: 'stream', text: 'partial ' })
+  app.event({ type: 'assistant.delta', stepId: 'stream', text: 'response' })
+  assert.equal(app.store.getState().streams.get('stream'), 'partial response')
+  assert.match(app.transcript.render(80).join('\n'), /partial response/)
+  assert.equal(headers, 0)
+  assert.equal(completions, 0)
+  app.event({ type: 'assistant.end', stepId: 'stream', response: response('Final response') })
+  assert.match(app.transcript.render(80).join('\n'), /Final response/)
+  assert.equal(app.store.getState().streams.size, 0)
+  assert.equal(app.store.getState().queued.size, 0)
+  assert.equal(app.streamComponents.size, 0)
+  await app.submit('/language zh-CN')
+  assert.equal(headers, 1)
+  assert.equal(completions, 1)
+  await app.shutdown()
+  app.store.dispatch({ type: 'ui.language', language: 'en' })
+  assert.equal(headers, 1)
+})
+
 test('untrusted terminal escape sequences cannot become UI control codes', () => {
   assert.equal(safeText('\x1b[2Jhello\x1b]52;c;secret\x07\n世界'), 'hello\n世界')
 })

@@ -22,6 +22,16 @@ Session: 有序 JSONL、fsync、输入与结果投影、恢复
 
 UI 不调用工具实现，工具不依赖终端，模型适配不负责运行循环。每次模型请求从持久记录重新投影；流式增量是临时展示，完整 assistant envelope 才进入执行历史。只有完整响应结束后执行工具，牺牲少量流式重叠以简化截断和恢复边界。
 
+## 界面状态与执行状态
+
+`src/ui/store.js` 使用固定版本 `zustand/vanilla`，每个 TerminalApp 创建独立实例，不依赖 React。通过 `dispatch(event)` 更新语言、权限模式显示、状态、预算数字快照、临时流式文本、待处理输入与弹窗元数据；`uiTransition` 是纯投影，不调用模型、工具或文件系统。`getState` 和 `subscribe` 用于读取与渲染，渲染方不修改返回的 Map 和对象。
+
+TerminalApp 保留终端组件、弹窗句柄、Promise 与关闭流程。订阅按字段变化更新标题、补全和底栏；流式文本只更新对应 Markdown 组件。消息完成或输入投递后删除临时状态；关闭界面时释放订阅与组件引用。可变 Budget 不直接进入 store，外部修改数字不会悄悄改变旧的显示快照。
+
+Agent 继续拥有执行生命周期，Dispatcher 继续拥有授权，Session 的 JSONL 继续负责持久事实与崩溃恢复。UI 中的模式只是执行事件的投影，用户切换仍通过 `agent.setMode()`；语言保存成功后才提交 UI 变化。store 不持久化会话授权、进程、AbortController、未完成流式文本或执行状态。
+
+当前选择 [Zustand vanilla](https://github.com/pmndrs/zustand#using-zustand-without-react)，因为所需的是简单可订阅的界面数据，且可用稳定接口封装依赖。[XState Store](https://stately.ai/docs/xstate-store) 的事件与纯转换也适合这一层；[XState actors](https://stately.ai/docs/actors) 适合以后明确表达执行状态转换和子任务生命周期，届时仍需保留日志提交、取消结算和未知副作用恢复约束。[MobX](https://mobx.js.org/observable-state.html) 更适合观察大量类对象；[Redux](https://redux.js.org/introduction/getting-started) 的 reducer/action 结构适合更多客户端共享事件协议。暂不同时引入多个库。
+
 ## 参考实现到我们的机制
 
 | 来源 | 查看位置 | 吸收的机制 | 当前实现 |

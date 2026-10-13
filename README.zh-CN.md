@@ -95,9 +95,13 @@ node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --conte
 | `/status` | 显示完整会话 ID、日志路径与待处理输入数 |
 | `/mode` 或 `/permissions` | 打开权限选择菜单；上下键选择、Enter 确认、Esc 取消 |
 | `/mode ask\|edit\|auto\|plan` | 直接切换权限模式，标题栏同步显示 |
+| `/language` 或 `/lang` | 打开界面语言选择菜单 |
+| `/language en` / `/language zh-CN` | 即时切换为英文 / 简体中文 |
 | `/exit` | 取消活动执行、等待工具收尾、关闭日志并恢复终端 |
 
 审批弹窗默认选中 **Deny**；上下键选择，Enter 确认，Esc 拒绝。**Allow once** 只批准本次调用；**Allow for this session** 批准当前工具在本次运行内的后续调用，例如 shell 的所有后续命令，仍受沙箱约束。不同工具需分别批准；切换 `/mode`（包括重新选择当前模式）或退出会清除授权，恢复旧会话也不会恢复授权。
+
+界面默认英文；中文审批选项对应「拒绝」「允许一次」「本次会话允许」。语言选择原子保存到 `~/.config/loom/settings.json`，供以后在不同项目启动时使用。切换后标题、底部状态、命令补全和新弹窗立即使用所选语言；命令名称保持稳定。模型回复、代码、已有消息、原始工具输出和诊断错误保留原文，权限与会话授权不变。翻译文案集中在 `src/ui/locales/`，使用命名占位符，缺失翻译回退英文。
 
 ## 执行模式
 

@@ -3,25 +3,16 @@ import { colors, editorTheme, markdownTheme, safeText, selectTheme } from './the
 import { modes } from '../core/modes.js'
 import { sandboxStatus } from '../execution/executor.js'
 import { SelectionDialog, dialogOptions } from './dialog.js'
+import { catalogs, translate, validateLanguage } from './i18n.js'
 
 // commands describes the terminal commands offered by the editor's completion menu.
-const commands = [
-  { name: 'help', description: 'Show controls and commands' },
-  { name: 'mode', description: 'Switch ask / edit / auto / plan permissions' },
-  { name: 'permissions', description: 'Open the permission mode selector' },
-  { name: 'sandbox', description: 'Show execution isolation and dependency status' },
-  { name: 'queue', description: 'Queue a task after current work' },
-  { name: 'stop', description: 'Interrupt current execution' },
-  { name: 'continue', description: 'Resume after inspecting partial or unknown effects' },
-  { name: 'compact', description: 'Compact earlier complete exchanges' },
-  { name: 'undo', description: 'Restore the latest unchanged file checkpoint' },
-  { name: 'status', description: 'Show session and budget' },
-  { name: 'exit', description: 'Close the session safely' }
-]
+const commands = ['help', 'mode', 'permissions', 'language', 'lang', 'sandbox', 'queue', 'stop', 'continue', 'compact', 'undo', 'status', 'exit']
 
 // TerminalApp presents a scrollable transcript, persistent editor, execution status, and cancellable approvals.
 export class TerminalApp {
-  constructor ({ cwd, session, model, mode, sandbox = 'required', terminal = new ProcessTerminal() }) {
+  constructor ({ cwd, session, model, mode, sandbox = 'required', language = 'en', saveLanguage = async () => {}, terminal = new ProcessTerminal() }) {
+    this.language = validateLanguage(language)
+    this.saveLanguage = saveLanguage
     this.tui = new TuiAltScreen(terminal)
     this.transcript = new Container()
     this.streams = new Map()
@@ -32,14 +23,14 @@ export class TerminalApp {
     this.mode = mode
     this.sandbox = sandbox
     this.cwd = cwd
-    this.header = new Text(`${colors.bold('LOOM CODE')}  ${colors.dim(model.label)}  ${colors.warning(mode)} · ${sandbox === 'off' ? colors.warning('UNSANDBOXED HOST') : 'sandbox required'}\n${colors.dim(cwd)}`, 1, 0)
+    this.header = new Text('', 1, 0)
     this.footer = new Text('', 1, 0)
     this.editor = new Editor(this.tui, editorTheme)
-    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, cwd))
+    this.refreshLanguage()
     this.editor.onSubmit = text => {
       this.editor.setText('')
       this.editor.addToHistory(text)
-      this.commandTail = this.commandTail.then(() => this.submit(text)).catch(error => this.add('Error', error.message))
+      this.commandTail = this.commandTail.then(() => this.submit(text)).catch(error => this.add(this.t('label.error'), error.message))
     }
     this.tui.setLayoutRoot(new VStack([
       { component: this.header, basis: 'auto', shrink: 0 },
@@ -66,15 +57,31 @@ export class TerminalApp {
     this.agent = agent
   }
 
+  t (key, values) { return translate(this.language, key, values) }
+
+  commandList () { return commands.map(name => ({ name, description: this.t(`command.${name}`) })) }
+
+  executionLabel (label = this.agent?.executor.label || this.sandbox) {
+    return label.replace('UNSANDBOXED HOST', this.t('sandbox.off')).replace('network denied', this.t('sandbox.denied'))
+  }
+
+  statusLabel (status) { return Object.hasOwn(catalogs.en, `status.${status}`) ? this.t(`status.${status}`) : status }
+
+  refreshLanguage () {
+    this.header.setText(`${colors.bold('LOOM CODE')}  ${colors.dim(this.model.label)}  ${colors.warning(`${this.mode} · ${this.t(`mode.${this.mode}.label`)}`)} · ${this.sandbox === 'off' ? colors.warning(this.t('sandbox.off')) : this.t('sandbox.required')}\n${colors.dim(this.cwd)}`)
+    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(this.commandList(), this.cwd))
+    this.refreshStatus(this.lastStatus || 'idle', this.lastBudget)
+  }
+
   start () {
-    this.add('Welcome', 'Enter 发送修正或新任务 · /queue 排队 · Esc 停止 · Ctrl+C 空闲时退出\n/mode 切换权限 · /continue 恢复未完成任务 · /help 查看帮助')
+    this.add(this.t('label.welcome'), this.t('welcome.controls'))
     for (const message of this.session.messages) {
-      if (message.role === 'user') this.add('You', message.content)
+      if (message.role === 'user') this.add(this.t('label.you'), message.content)
       if (message.role === 'assistant') this.add('Loom', message.content.filter(part => part.type === 'text').map(part => part.text).join('\n'))
       if (message.role === 'toolResult') this.add(message.toolName, message.content[0]?.text || '')
     }
-    if (this.agent.blocked) this.add('Recovery required', '发现结果未知的工具调用。检查工作区和日志后，用 /continue 明确恢复；不会自动重放副作用。')
-    if (this.session.pending.length) this.add('Pending inputs', `${this.session.pending.length} 个持久化输入等待 /continue`)
+    if (this.agent.blocked) this.add(this.t('label.recovery'), this.t('recovery.instructions'))
+    if (this.session.pending.length) this.add(this.t('label.pending'), this.t('pending.count', { count: this.session.pending.length }))
     this.tui.start()
   }
 
@@ -88,16 +95,16 @@ export class TerminalApp {
   event (event) {
     if (event.child) {
       if (event.type === 'user') this.add(`${event.role} · ${event.child.slice(0, 8)}`, event.text)
-      if (event.type === 'tool.start') this.add(`${event.role} tool`, event.call.name)
-      if (event.type === 'error') this.add(`${event.role} error`, event.text)
+      if (event.type === 'tool.start') this.add(this.t('child.tool', { role: event.role }), event.call.name)
+      if (event.type === 'error') this.add(this.t('child.error', { role: event.role }), event.text)
       return
     }
     if (event.type === 'mode.changed') this.updateMode(event.mode)
-    if (event.type === 'permission.granted') this.add('Permissions', `${event.tool} 已获本次运行授权，不再逐次询问；切换 /mode 或退出后失效，沙箱边界保持不变。`)
-    if (event.type === 'queued') this.queued.set(event.inputId, this.add(`Pending · ${event.delivery}`, event.text))
+    if (event.type === 'permission.granted') this.add(this.t('label.permissions'), this.t('grant.notice', { tool: event.tool }))
+    if (event.type === 'queued') this.queued.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
     if (event.type === 'user') {
       const component = this.queued.get(event.inputId)
-      if (component) { component.setText(`${colors.accent('You')}\n${safeText(event.text)}`); this.queued.delete(event.inputId) } else this.add('You', event.text)
+      if (component) { component.setText(`${colors.accent(this.t('label.you'))}\n${safeText(event.text)}`); this.queued.delete(event.inputId) } else this.add(this.t('label.you'), event.text)
     }
     if (event.type === 'assistant.start') {
       const component = new Markdown('', 1, 1, markdownTheme)
@@ -114,31 +121,34 @@ export class TerminalApp {
       this.streams.delete(event.stepId)
       this.refreshStatus(this.agent.status, event.budget)
     }
-    if (event.type === 'tool.start') this.add(`Tool · ${event.call.name}`, JSON.stringify(event.call.arguments))
-    if (event.type === 'tool.end') this.add(event.result.isError ? 'Tool failed' : 'Tool completed', event.result.text.slice(0, 2500))
-    if (event.type === 'tool.progress') this.refreshStatus(event.text)
-    if (event.type === 'error') this.add('Execution stopped', `${event.text}\n用 /continue 恢复，或提交新的任务。`)
+    if (event.type === 'tool.start') this.add(this.t('tool.start', { name: event.call.name }), JSON.stringify(event.call.arguments))
+    if (event.type === 'tool.end') this.add(this.t(event.result.isError ? 'tool.failed' : 'tool.completed'), event.result.text.slice(0, 2500))
+    if (event.type === 'tool.progress') this.refreshStatus(event.kind === 'process.started' ? event : event.text)
+    if (event.type === 'error') this.add(this.t('label.stopped'), `${event.text}\n${this.t('error.resume')}`)
     if (event.type === 'status') this.refreshStatus(event.text, event.budget)
     this.tui.requestRender()
   }
 
   refreshStatus (status, budget = this.agent?.budget) {
-    this.footer.setText(colors.dim(`${status} · session ${this.session.id.slice(0, 8)} · calls ${budget?.calls || 0} · tokens ${budget?.tokens || 0} · $${(budget?.cost || 0).toFixed(4)}\nEnter: steer · /queue: next task · Esc: interrupt · Ctrl+C: stop/exit`))
+    this.lastStatus = status
+    this.lastBudget = budget
+    const label = typeof status === 'object' ? this.t('status.process', { boundary: this.executionLabel(status.boundary), pid: status.pid }) : this.statusLabel(status)
+    this.footer.setText(colors.dim(`${this.t('status.footer', { status: label, session: this.session.id.slice(0, 8), calls: budget?.calls || 0, tokens: budget?.tokens || 0, cost: `$${(budget?.cost || 0).toFixed(4)}` })}\n${this.t('status.controls')}`))
     this.tui.requestRender()
   }
 
   updateMode (mode) {
     this.mode = mode
-    this.header.setText(`${colors.bold('LOOM CODE')}  ${colors.dim(this.model.label)}  ${colors.warning(`${mode} · ${modes[mode].label}`)} · sandbox ${this.sandbox}\n${colors.dim(this.cwd)}`)
-    this.add('Permissions', `${mode} · ${modes[mode].description}`)
+    this.refreshLanguage()
+    this.add(this.t('label.permissions'), `${mode} · ${this.t(`mode.${mode}.description`)}`)
   }
 
   chooseMode () {
-    if (this.agent.running) throw new Error('请先用 /stop 停止任务，或等待完成，再切换权限。')
+    if (this.agent.running) throw new Error(this.t('mode.busy'))
     return new Promise(resolve => {
-      const choices = new SelectList(Object.entries(modes).map(([value, mode]) => ({ value, label: `${value} · ${mode.label}`, description: mode.description })), 4, selectTheme)
+      const choices = new SelectList(Object.keys(modes).map(value => ({ value, label: `${value} · ${this.t(`mode.${value}.label`)}`, description: this.t(`mode.${value}.description`) })), 4, selectTheme)
       choices.setSelectedIndex(Object.keys(modes).indexOf(this.agent.mode))
-      const dialog = new SelectionDialog({ title: colors.warning(`切换权限 · 当前 ${this.agent.mode}`), preview: `完全自动模式跳过审批；执行边界：${this.agent.executor.label}。`, choices, terminal: this.tui.terminal })
+      const dialog = new SelectionDialog({ title: colors.warning(this.t('mode.title', { mode: this.agent.mode })), preview: this.t('mode.preview', { boundary: this.executionLabel() }), choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
       const overlay = this.tui.showOverlay(dialog, dialogOptions)
       const finish = mode => { overlay.hide(); this.modeMenuCancel = null; this.tui.requestRender(); resolve(mode) }
       choices.onSelect = item => finish(item.value)
@@ -155,16 +165,40 @@ export class TerminalApp {
     if (this.mode !== mode) this.updateMode(mode)
   }
 
+  chooseLanguage () {
+    return new Promise(resolve => {
+      const choices = new SelectList(Object.keys(catalogs).map(value => ({ value, label: this.t(`language.${value}`), description: this.t(`language.${value}.description`) })), 2, selectTheme)
+      choices.setSelectedIndex(Object.keys(catalogs).indexOf(this.language))
+      const dialog = new SelectionDialog({ title: colors.warning(this.t('language.title')), preview: this.t('language.preview'), choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
+      const overlay = this.tui.showOverlay(dialog, dialogOptions)
+      const finish = language => { overlay.hide(); this.languageMenuCancel = null; this.tui.requestRender(); resolve(language) }
+      choices.onSelect = item => finish(item.value)
+      choices.onCancel = () => finish(undefined)
+      this.languageMenuCancel = () => finish(undefined)
+      this.tui.requestRender()
+    })
+  }
+
+  async switchLanguage (input) {
+    const language = input || await this.chooseLanguage()
+    if (!language || this.closing) return
+    if (!Object.hasOwn(catalogs, language)) throw new Error(this.t('language.invalid'))
+    await this.saveLanguage(language)
+    this.language = language
+    this.refreshLanguage()
+    this.add(this.t('label.language'), this.t('language.changed', { language: this.t(`language.${language}`) }))
+  }
+
   approve ({ call, effect, args, signal }) {
     if (signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
       const choices = new SelectList([
-        { value: 'deny', label: 'Deny', description: 'Return refusal to the agent' },
-        { value: 'allow', label: 'Allow once', description: 'Execute this exact call' },
-        { value: 'session', label: 'Allow for this session', description: `All ${safeText(call.name)} calls until mode change or exit` }
+        { value: 'deny', label: this.t('approval.deny'), description: this.t('approval.deny.description') },
+        { value: 'allow', label: this.t('approval.once'), description: this.t('approval.once.description') },
+        { value: 'session', label: this.t('approval.session'), description: this.t('approval.session.description', { tool: safeText(call.name) }) }
       ], 3, selectTheme, { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 24 })
-      const title = colors.warning(effect === 'shell' ? `APPROVE SHELL · ${this.agent?.executor.label || this.sandbox}` : 'APPROVE WORKSPACE EDIT')
-      const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal })
+      const title = colors.warning(this.t(effect === 'shell' ? 'approval.shell' : 'approval.write', { boundary: this.executionLabel() }))
+      const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
       const overlay = this.tui.showOverlay(dialog, dialogOptions)
       const finish = allowed => {
         signal.removeEventListener('abort', abort)
@@ -184,16 +218,17 @@ export class TerminalApp {
     const text = input.trim()
     if (!text) return
     if (/^\/(mode|permissions)(\s|$)/.test(text)) return this.switchMode(text.split(/\s+/).slice(1).join(' '))
+    if (/^\/(language|lang)(\s|$)/.test(text)) return this.switchLanguage(text.split(/\s+/).slice(1).join(' '))
     if (text === '/exit') return this.shutdown()
     if (text === '/stop') return this.agent.interrupt()
-    if (text === '/sandbox') { this.add('Sandbox', `${this.agent.executor.label}\n${JSON.stringify(await sandboxStatus(), null, 2)}\n模型 API 在沙箱外；/mode 不改变隔离边界。`); return }
+    if (text === '/sandbox') { this.add(this.t('label.sandbox'), `${this.executionLabel()}\n${JSON.stringify(await sandboxStatus(), null, 2)}\n${this.t('sandbox.details')}`); return }
     if (text === '/continue') return this.agent.resume()
-    if (text === '/compact') { await this.agent.compact(); this.add('Context', '压缩完成，原始历史已保留。'); return }
+    if (text === '/compact') { await this.agent.compact(); this.add(this.t('label.context'), this.t('context.compacted')); return }
     if (text === '/undo') { await this.agent.undo(); return }
-    if (text === '/status') { this.add('Session', `ID: ${this.session.id}\nLog: ${this.session.directory}\nPending: ${this.session.pending.length}\nStatus: ${this.agent.status}`); return }
-    if (text === '/help') { this.add('Commands', commands.map(command => `/${command.name} — ${command.description}`).join('\n')); return }
+    if (text === '/status') { this.add(this.t('label.session'), this.t('session.details', { id: this.session.id, log: this.session.directory, pending: this.session.pending.length, status: this.statusLabel(this.agent.status) })); return }
+    if (text === '/help') { this.add(this.t('label.commands'), this.commandList().map(command => `/${command.name} — ${command.description}`).join('\n')); return }
     if (text.startsWith('/queue ')) return this.agent.enqueue(text.slice(7), 'queue')
-    if (text.startsWith('/')) throw new Error('Unknown command; use /help')
+    if (text.startsWith('/')) throw new Error(this.t('command.unknown'))
     return this.agent.enqueue(text)
   }
 
@@ -201,6 +236,7 @@ export class TerminalApp {
     if (this.closing) return
     this.closing = true
     this.modeMenuCancel?.()
+    this.languageMenuCancel?.()
     try {
       await this.agent.close()
     } catch (error) {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- English-default UI with centralized English/Chinese catalogs, `/language` / `/lang`, and atomic user-level language preferences.
+- Centered framed permission dialogs with visible choices on narrow screens and per-tool approval grants for the current run.
 - Mandatory native shell isolation using sandbox-runtime 0.0.79: Seatbelt on macOS and bubblewrap on Linux.
 - Default-denied shell networking, protected metadata and credential paths, isolated temporary home/cache, and an environment allowlist.
 - Fail-closed dependency and policy checks, explicit `--sandbox off`, and `/sandbox` diagnostics.

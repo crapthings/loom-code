@@ -1,5 +1,6 @@
 import { Text, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 import { colors } from './theme.js'
+import { translate } from './i18n.js'
 
 // panelBackground gives trusted rendered dialog rows a solid background, including after child style resets.
 function panelBackground (line) {
@@ -9,11 +10,12 @@ function panelBackground (line) {
 
 // SelectionDialog keeps a bounded preview above visible keyboard choices inside a framed modal.
 export class SelectionDialog {
-  constructor ({ title, preview, choices, terminal }) {
+  constructor ({ title, preview, choices, terminal, t = key => translate('en', key) }) {
     this.title = new Text(title, 0, 0)
     this.preview = new Text(preview, 0, 0)
     this.choices = choices
     this.terminal = terminal
+    this.t = t
   }
 
   handleInput (data) { this.choices.handleInput(data) }
@@ -30,10 +32,10 @@ export class SelectionDialog {
     const inner = Math.max(1, width - 4)
     const choices = this.choices.render(inner)
     const title = this.title.render(inner).slice(0, 2)
-    const hint = truncateToWidth('↑/↓ 选择 · Enter 确认 · Esc 取消', inner)
+    const hint = truncateToWidth(this.t('dialog.controls'), inner)
     const budget = Math.max(0, this.terminal.rows - 2 - choices.length - title.length - 4)
     let preview = this.preview.render(inner)
-    if (preview.length > budget) preview = budget ? [...preview.slice(0, budget - 1), colors.dim(truncateToWidth('… 参数预览已截断', inner))] : []
+    if (preview.length > budget) preview = budget ? [...preview.slice(0, budget - 1), colors.dim(truncateToWidth(this.t('dialog.truncated'), inner))] : []
     this.choiceLayout = { row: title.length + preview.length + 2, width: inner, height: choices.length }
     const border = colors.dim(`┌${'─'.repeat(Math.max(0, width - 2))}┐`)
     const bottom = colors.dim(`└${'─'.repeat(Math.max(0, width - 2))}┘`)

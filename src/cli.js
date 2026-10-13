@@ -9,6 +9,7 @@ import { safeText } from './ui/theme.js'
 import { compatibleModels } from './model/compatible.js'
 import { validateMode } from './core/modes.js'
 import { sandboxStatus } from './execution/executor.js'
+import { LanguagePreferences } from './ui/preferences.js'
 
 // parseOptions validates command-line configuration before opening a session or entering raw mode.
 export function parseOptions (args, env = process.env) {
@@ -73,6 +74,7 @@ Usage: loom [options]
   --help                   Show this help
 
 Interactive: Enter steers, /queue schedules, Esc interrupts, /help lists commands.
+Interface: English by default; /language selects and saves en or zh-CN.
 API credentials resolve through the selected provider's environment variables.
 Default: Vercel AI Gateway / deepseek/deepseek-v4.1-flash; set AI_GATEWAY_API_KEY.
 LOOM_PROVIDER and LOOM_MODEL override the defaults.
@@ -93,12 +95,14 @@ export async function main (args = process.argv.slice(2)) {
   const cwd = await realpath(options.cwd)
   const collection = options['base-url'] ? compatibleModels(options['base-url'], options.model, options.contextWindow) : undefined
   const model = options.demo ? createDemoModel() : createModel({ ...options, collection, provider: collection ? 'compatible' : options.provider })
+  const preferences = new LanguagePreferences()
+  const language = headless ? 'en' : await preferences.load()
   const session = await Session.open(cwd, options.session)
   let agent
   let app
   const shutdown = () => app ? app.shutdown().catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1 }) : agent.interrupt()
   try {
-    if (!headless) app = new TerminalApp({ cwd, session, model, mode: options.mode, sandbox: options.sandbox })
+    if (!headless) app = new TerminalApp({ cwd, session, model, mode: options.mode, sandbox: options.sandbox, language, saveLanguage: language => preferences.save(language) })
     const emit = event => {
       if (app) return app.event(event)
       if (options.json) process.stdout.write(`${JSON.stringify(event)}\n`)

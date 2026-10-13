@@ -46,7 +46,7 @@ export function shellTool (cwd, session, executor = new ShellExecutor({ cwd })) 
         }
         child.stdout.on('data', capture)
         child.stderr.on('data', capture)
-        emit({ type: 'tool.progress', text: `${launch.label} process ${child.pid} started` })
+        emit({ type: 'tool.progress', kind: 'process.started', boundary: launch.label, pid: child.pid, text: `${launch.label} process ${child.pid} started` })
         const code = await new Promise((resolve, reject) => {
           child.once('error', reject)
           child.once('close', resolve)

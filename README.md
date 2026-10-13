@@ -73,8 +73,12 @@ Stop or finish active work before changing permissions. Changes update the instr
 | `/compact` | Summarize older exchanges while keeping raw history |
 | `/undo` | Restore the latest file checkpoint if the file has not changed externally |
 | `/status` | Show session ID, directory, and runtime status |
+| `/language` or `/lang` | Open the interface language selector |
+| `/language en` / `/language zh-CN` | Switch to English / Simplified Chinese immediately |
 | `/help` | List commands |
 | `/exit` | Cancel work, wait for cleanup, and close the terminal UI |
+
+The interface defaults to English. Language choices are saved atomically in `~/.config/loom/settings.json` and apply across projects on future launches. Commands keep their stable names; model responses, code, previous messages, raw tool output and diagnostic errors keep their original language. Changing the UI language does not change permissions or session grants. Translation catalogs live in `src/ui/locales/`, with named placeholders and English fallback.
 
 Approval dialogs default to **Deny**. Use arrow keys and Enter to select, or Esc to cancel.
 

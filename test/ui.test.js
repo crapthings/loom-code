@@ -4,6 +4,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { TerminalApp } from '../src/ui/app.js'
 import { safeText } from '../src/ui/theme.js'
 import { parseOptions } from '../src/cli.js'
+import { catalogs, translate } from '../src/ui/i18n.js'
+import { LanguagePreferences } from '../src/ui/preferences.js'
+import path from 'node:path'
 import { agentFixture, call, deferred, fixture, response } from './helpers.js'
 
 // FakeTerminal drives the production renderer while retaining its screen output for assertions.
@@ -116,6 +119,70 @@ test('TUI editor submissions run through the real command and input admission pa
 
 test('untrusted terminal escape sequences cannot become UI control codes', () => {
   assert.equal(safeText('\x1b[2Jhello\x1b]52;c;secret\x07\n世界'), 'hello\n世界')
+})
+
+test('language commands persist preferences and refresh live controls without changing permissions or conversation content', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const preferences = new LanguagePreferences(path.join(cwd, 'user-settings', 'settings.json'))
+  assert.equal(await preferences.load(), 'en')
+  const terminal = new FakeTerminal()
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal, saveLanguage: language => preferences.save(language) })
+  app.bind(agent)
+  t.after(() => app.tui.stop())
+  app.start()
+  const original = app.add('Original', 'User content stays English 中文')
+  const before = original.render(80)
+  agent.dispatcher.sessionGrants.add('shell')
+  app.event({ type: 'tool.progress', kind: 'process.started', boundary: 'Seatbelt · network denied', pid: 42 })
+  await app.submit('/language zh-CN')
+  assert.equal(app.language, 'zh-CN')
+  assert.equal(await new LanguagePreferences(preferences.file).load(), 'zh-CN')
+  assert.equal(agent.mode, 'ask')
+  assert.equal(agent.dispatcher.sessionGrants.has('shell'), true)
+  assert.equal(model.requests.length, 0)
+  assert.deepEqual(original.render(80), before)
+  assert.match(safeText(app.header.render(80).join('\n')), /逐次询问.*强制沙箱/)
+  assert.match(safeText(app.footer.render(80).join('\n')), /进程 42 已启动/)
+  assert.match(app.commandList().find(command => command.name === 'language').description, /界面语言/)
+  const controller = new AbortController()
+  const approval = app.approve({ call: call('shell'), effect: 'shell', args: { command: 'test' }, signal: controller.signal })
+  await delay(40)
+  const screen = app.tui.getScreenLines().map(safeText).join('\n')
+  assert.match(screen, /批准命令/)
+  assert.match(screen, /本次会话允许/)
+  assert.match(screen, /允许一次/)
+  controller.abort()
+  assert.equal(await approval, false)
+  const cancelled = app.submit('/language')
+  terminal.input('\x1b')
+  await cancelled
+  assert.equal(app.language, 'zh-CN')
+  const selected = app.submit('/language')
+  terminal.input('\x1b[A')
+  terminal.input('\r')
+  await selected
+  assert.equal(app.language, 'en')
+  assert.equal(await preferences.load(), 'en')
+  assert.match(safeText(app.footer.render(80).join('\n')), /process 42 started/)
+  await assert.rejects(app.submit('/lang unknown'), /Unsupported language/)
+  assert.equal(app.language, 'en')
+  await app.submit('/lang zh-CN')
+  assert.equal(app.language, 'zh-CN')
+})
+
+test('language save failures leave the current UI unchanged and catalogs preserve all message placeholders', async t => {
+  const { cwd, session } = await fixture(t)
+  const app = new TerminalApp({ cwd, session, model: { label: 'fake' }, mode: 'ask', saveLanguage: async () => { throw new Error('Cannot save settings') }, terminal: new FakeTerminal() })
+  t.after(() => app.tui.stop())
+  await assert.rejects(app.submit('/language zh-CN'), /Cannot save settings/)
+  assert.equal(app.language, 'en')
+  assert.deepEqual(Object.keys(catalogs.en).sort(), Object.keys(catalogs['zh-CN']).sort())
+  for (const key of Object.keys(catalogs.en)) {
+    const placeholders = text => [...text.matchAll(/\{([\w-]+)\}/g)].map(match => match[1]).sort()
+    assert.deepEqual(placeholders(catalogs.en[key]), placeholders(catalogs['zh-CN'][key]), key)
+  }
+  assert.match(translate('zh-CN', 'grant.notice', { tool: '$&' }), /\$&/)
+  assert.throws(() => translate('de', 'approval.deny'), /Unsupported/)
 })
 
 test('slash permission commands update the runtime, prompt, tools, and header together', async t => {

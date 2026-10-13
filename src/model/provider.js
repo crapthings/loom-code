@@ -17,11 +17,12 @@ export function createModel ({ provider = defaultProvider, model: id = defaultMo
   return {
     label: `${provider}/${id}`,
     contextWindow: model.contextWindow,
-    complete: async ({ system, messages, tools }, { signal, onDelta, onRetry = () => {} }) => {
+    maxOutputTokens: model.maxTokens,
+    complete: async ({ system, messages, tools }, { signal, maxTokens, onDelta, onRetry = () => {} }) => {
       for (let attempt = 0; attempt < 3; attempt++) {
         signal.throwIfAborted()
         let streamed = false
-        const stream = models.streamSimple(model, { systemPrompt: system, messages, tools }, { signal, maxRetries: 0, timeoutMs: 120000, reasoning: reasoning === 'off' ? undefined : reasoning })
+        const stream = models.streamSimple(model, { systemPrompt: system, messages, tools }, { signal, maxTokens, maxRetries: 0, timeoutMs: 120000, reasoning: reasoning === 'off' ? undefined : reasoning })
         for await (const event of stream) {
           if (event.type === 'text_delta') { streamed = true; onDelta(event.delta) }
         }

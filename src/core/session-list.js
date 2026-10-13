@@ -42,13 +42,13 @@ export async function listSessions (cwd) {
       const events = raw.slice(0, raw.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map(JSON.parse)
       const meta = events.find(event => event.type === 'session.created')
       if (!meta || meta.cwd !== cwd) { skipped++; continue }
+      const pending = new Set()
+      const calls = new Set()
+      let first
       for (const event of events) {
         if (event.type === 'agent.spawned') children.add(event.childId)
         if (event.type === 'session.parent') children.add(entry.name)
-      }
-      const pending = new Set()
-      const calls = new Set()
-      for (const event of events) {
+        if (!first && event.type === 'inbox.enqueued') first = event
         if (event.type === 'inbox.enqueued') pending.add(event.inputId)
         if (event.type === 'inbox.delivered' || event.type === 'inbox.cancelled') pending.delete(event.inputId)
         if (event.type === 'tool.started') calls.add(event.call?.id)
@@ -57,7 +57,6 @@ export async function listSessions (cwd) {
       const status = sessionStatus(events, calls)
       const updated = events.at(-1)?.at || meta.at
       if (!Number.isFinite(updated)) throw new Error('Invalid session timestamp')
-      const first = events.find(event => event.type === 'inbox.enqueued')
       sessions.push({ id: entry.name, title: String(first?.text || 'Untitled session').replace(/[\r\n\t]/g, ' ').slice(0, 160), updated, status, pending: pending.size, busy: await lockedSession(directory) })
     } catch { skipped++ }
   }

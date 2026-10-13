@@ -5,6 +5,9 @@ import { readText, writeSynced } from '../io.js'
 import { Type } from '@earendil-works/pi-ai'
 import { protectedNames, isCredentialPath, runtimeRoot } from '../execution/policy.js'
 
+// skippedDirectories reuses constant-time exclusions for each workspace directory entry.
+const skippedDirectories = new Set([...protectedNames, 'node_modules', 'vendor', 'dist', 'coverage'])
+
 // hashText identifies the exact UTF-8 file version observed by an agent.
 export function hashText (text) {
   return createHash('sha256').update(text).digest('hex')
@@ -114,7 +117,7 @@ export function fileTools (cwd, session) {
         if (hashText(previous) !== expectedHash) throw new Error('File changed; read it again before editing')
         const index = previous.indexOf(oldText)
         if (index < 0 || previous.indexOf(oldText, index + 1) >= 0) throw new Error('oldText must match exactly once')
-        return saveFile(session, file, input, previous, previous.replace(oldText, () => newText), signal)
+        return saveFile(session, file, input, previous, previous.slice(0, index) + newText + previous.slice(index + oldText.length), signal)
       }
     }
   ]
@@ -130,7 +133,7 @@ async function walkFiles (cwd, input, signal) {
   while (pending.length && files.length < 5000) {
     signal.throwIfAborted()
     for (const entry of await readdir(pending.pop(), { withFileTypes: true })) {
-      if ([...protectedNames, 'node_modules', 'vendor', 'dist', 'coverage'].includes(entry.name) || isCredentialPath(entry.name)) continue
+      if (skippedDirectories.has(entry.name) || isCredentialPath(entry.name)) continue
       const file = path.join(entry.parentPath, entry.name)
       if (entry.isDirectory()) pending.push(file)
       if (entry.isFile()) files.push(path.relative(cwd, file))

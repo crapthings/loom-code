@@ -210,6 +210,20 @@ test('startup session picker excludes busy sessions and restores terminal on sel
   assert.equal(await selectSession(sessions.map(session => ({ ...session, busy: true })), { terminal }), undefined)
 })
 
+test('status reports localized context estimates without making model calls', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal() })
+  app.bind(agent)
+  t.after(() => app.tui.stop())
+  await app.submit('/status')
+  assert.match(app.transcript.render(100).join('\n'), /Estimated input/)
+  assert.match(app.transcript.render(100).join('\n'), /output reserve/)
+  await app.submit('/language zh-CN')
+  await app.submit('/status')
+  assert.match(app.transcript.render(100).join('\n'), /估计输入/)
+  assert.equal(model.requests.length, 0)
+})
+
 test('continue explains empty recovery in the selected UI language without calling the model', async t => {
   const { cwd, session, model, agent } = await agentFixture(t, [])
   const app = new TerminalApp({ cwd, session, model, mode: 'ask', language: 'zh-CN', terminal: new FakeTerminal() })
@@ -371,4 +385,19 @@ test('CLI validates budgets, modes, and rejects provider selection', () => {
   assert.equal(parseOptions(['--mode', 'auto']).sandbox, 'required')
   assert.equal(parseOptions(['--sandbox', 'off']).sandbox, 'off')
   assert.throws(() => parseOptions(['--sandbox', 'best-effort']), /sandbox/)
+})
+
+test('memory command renders localized empty state through the dispatcher without calling the model', async t => {
+  const { cwd, session, agent, model } = await agentFixture(t, [])
+  try {
+    for (const language of ['en', 'zh-CN']) {
+      const app = new TerminalApp({ cwd, session, model: model.label, mode: 'ask', language, terminal: new FakeTerminal() })
+      app.bind(agent)
+      await app.submit('/memory')
+      assert.match(app.transcript.render(100).join('\n'), language === 'en' ? /No project memories saved/ : /尚未保存项目记忆/)
+      app.unsubscribe()
+      app.tui.stop()
+    }
+    assert.equal(model.requests.length, 0)
+  } finally { await agent.close() }
 })

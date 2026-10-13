@@ -8,9 +8,11 @@ import { fileTools } from './files.js'
 import { shellTool } from './shell.js'
 import { checkpointTool } from './checkpoints.js'
 import { validateMode } from '../core/modes.js'
+import { memoryTools } from './memory.js'
+import { historyTools } from './history.js'
 
 // createTools assembles built-ins and optional delegation behind one dispatcher-compatible registry.
-export function createTools ({ cwd, session, delegate, executor }) {
+export function createTools ({ cwd, session, delegate, executor, history, memory, allowWorkspace = false }) {
   const tools = [...fileTools(cwd, session), shellTool(cwd, session, executor), checkpointTool(cwd, session), {
     name: 'read_artifact',
     description: 'Read a stored tool-output artifact by ID with a character offset.',
@@ -19,6 +21,8 @@ export function createTools ({ cwd, session, delegate, executor }) {
     parameters: Type.Object({ id: Type.String({ pattern: '^[a-f0-9-]+\\.txt$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })) }),
     execute: async ({ id, offset = 0 }) => (await readText(path.join(session.directory, id), 10 * 1024 * 1024)).slice(offset, offset + 12000)
   }]
+  if (history) tools.push(...historyTools({ session, history, allowWorkspace }))
+  if (memory && allowWorkspace) tools.push(...memoryTools({ session, memory }))
   if (delegate) {
     tools.push({
       name: 'delegate',
@@ -94,7 +98,7 @@ export class Dispatcher {
       await this.session.append('tool.started', { call, source })
       started = true
       this.emit({ type: 'tool.start', call })
-      const output = await tool.execute(args, { signal, emit: this.emit })
+      const output = await tool.execute(args, { signal, emit: this.emit, call })
       result = normalizeResult(output)
       if (result.text.length > 14000) {
         const artifact = `${randomUUID()}.txt`

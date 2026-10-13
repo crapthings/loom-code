@@ -22,6 +22,7 @@ export class TerminalApp {
       continue: () => this.agent.resume(),
       compact: () => this.compactContext(),
       undo: () => this.agent.undo(),
+      memory: input => this.showMemory(input),
       status: () => this.showStatus(),
       exit: () => this.shutdown()
     }, (key, values) => this.t(key, values))
@@ -270,8 +271,19 @@ export class TerminalApp {
     this.add(this.t('label.commands'), this.commandList().map(command => `/${command.name} — ${command.description}`).join('\n'))
   }
 
+  async showMemory (input) {
+    const text = await this.agent.inspectMemories(input)
+    let display = text
+    try {
+      const result = JSON.parse(text)
+      display = result.records?.length === 0 ? this.t('memory.empty') : JSON.stringify(result, null, 2)
+    } catch { /* Truncated tool output carries an artifact reference instead of valid JSON. */ }
+    this.add(this.t('label.memory'), display)
+  }
+
   showStatus () {
     this.add(this.t('label.session'), this.t('session.details', { id: this.session.id, log: this.session.directory, pending: this.session.pending.length, status: this.statusLabel(this.agent.status) }))
+    this.add(this.t('label.context'), this.t('context.usage', this.agent.contextUsage()))
   }
 
   async showSandbox () {

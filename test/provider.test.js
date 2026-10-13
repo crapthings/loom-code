@@ -58,6 +58,7 @@ test('GPT-6.1 Sol selects gateway metadata and preserves reasoning, streams, and
       assert.equal(context.tools, input.tools)
       assert.equal(request.reasoning, 'high')
       assert.equal(request.signal, signal)
+      assert.equal(request.maxTokens, 4096)
       return {
         async * [Symbol.asyncIterator] () { yield { type: 'text_delta', delta: 'Inspecting' } },
         result: async () => response
@@ -67,8 +68,9 @@ test('GPT-6.1 Sol selects gateway metadata and preserves reasoning, streams, and
   const model = createModel({ ...options, collection })
   assert.equal(model.label, `vercel-ai-gateway/${id}`)
   assert.equal(model.contextWindow, 1050000)
+  assert.equal(model.maxOutputTokens, 128000)
   let text = ''
-  const result = await model.complete(input, { signal, onDelta: delta => { text += delta } })
+  const result = await model.complete(input, { signal, maxTokens: 4096, onDelta: delta => { text += delta } })
   assert.equal(text, 'Inspecting')
   assert.equal(result.stopReason, 'toolUse')
   assert.equal(result.content.find(part => part.type === 'toolCall').name, 'list_files')

@@ -10,6 +10,7 @@ export function createCommands (actions, t) {
     continue: { execute: actions.continue },
     compact: { execute: actions.compact },
     undo: { execute: actions.undo },
+    memory: { argument: 'optional', execute: actions.memory },
     status: { execute: actions.status },
     exit: { execute: actions.exit }
   }

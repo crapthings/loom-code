@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Incrementally project session inbox/messages and latest events, bound task-state allocation, scan compacted journal tails, merge compaction/listing traversals, and reuse file-tree exclusions; add deterministic traversal and boundary-equivalence checks.
+
+- Add explicit source-backed project memory with independent SQLite storage, immutable revisions, expiry, scoped recall, version-checked mutations, normal dispatcher permissions, and `/memory` browsing.
+- Add a rebuildable SQLite/FTS5 history index in a cancellable Worker, source-linked search/read tools, same-workspace recall with child isolation, prefix-validated incremental indexing, and packed-worker coverage.
+
+- Add explicit input/output/safety context budgets, `/status` context diagnostics, source-linked current-task projections across compaction/reopen, and guards against oversized retained exchanges and ineffective automatic compaction.
+
 - Add opt-in completion shadow evaluation with a separate Luna Decisions/Jev classifier adapter, bounded evidence, decision budgets, cancellation/deadlines, durable evaluation records, and offline protocol tests.
 
 - Share bounded file IO across modules, read reopened journals through their owned handles, reject invalid lock owners, make sandbox cleanup idempotent, and clear failed UI streams.

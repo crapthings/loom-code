@@ -15,6 +15,7 @@ export class Session extends EventEmitter {
     this.lock = lock
     this.events = []
     this.tail = Promise.resolve()
+    this.projection = { events: this.events, cursor: 0, inbox: new Map(), messages: [], latest: new Map() }
   }
 
   static async open (cwd, id = randomUUID(), { existing = false } = {}) {
@@ -66,17 +67,31 @@ export class Session extends EventEmitter {
     return operation
   }
 
-  get pending () {
-    const inbox = new Map()
-    for (const event of this.events) {
-      if (event.type === 'inbox.enqueued') inbox.set(event.inputId, event)
-      if (event.type === 'inbox.delivered' || event.type === 'inbox.cancelled') inbox.delete(event.inputId)
+  project () {
+    if (this.projection.events !== this.events || this.projection.cursor > this.events.length) {
+      this.projection = { events: this.events, cursor: 0, inbox: new Map(), messages: [], latest: new Map() }
     }
-    return [...inbox.values()]
+    const projection = this.projection
+    while (projection.cursor < this.events.length) {
+      const event = this.events[projection.cursor++]
+      if (event.type === 'inbox.enqueued') projection.inbox.set(event.inputId, event)
+      if (event.type === 'inbox.delivered' || event.type === 'inbox.cancelled') projection.inbox.delete(event.inputId)
+      if (event.message) projection.messages.push(event.message)
+      projection.latest.set(event.type, event)
+    }
+    return projection
+  }
+
+  latestEvent (type) {
+    return this.project().latest.get(type)
+  }
+
+  get pending () {
+    return [...this.project().inbox.values()]
   }
 
   get messages () {
-    return this.events.flatMap(event => event.message ? [event.message] : [])
+    return this.project().messages.slice()
   }
 
   get unfinished () {

@@ -1,5 +1,7 @@
 # Loom Code
 
+历史检索现已提供只读工具 `search_history` 和 `read_history`，默认当前会话；主代理可显式检索同工作区其他根会话，子代理只能查询自身。SQLite/FTS5 索引按需创建于 `.loom/history.sqlite`，在 Worker 中运行，支持增量更新与删除缓存后重建；原始 JSONL 仍是执行事实来源，索引失败不改变任务恢复。`/status` 可查看上下文估算及输出、安全预留。自动跨会话记忆尚未实现，历史结果需要根据当前代码重新核验。
+
 [![CI](https://github.com/crapthings/loom-code/actions/workflows/ci.yml/badge.svg)](https://github.com/crapthings/loom-code/actions/workflows/ci.yml)
 
 [English](README.md) | 中文
@@ -107,6 +109,7 @@ loom resume --list --json    # 输出 JSON
 | `/continue` | 明确恢复未完成任务或确认已检查未知执行结果 |
 | `/compact` | 压缩先前完整交互；原始日志保留 |
 | `/undo` | 撤销最新文件工具编辑；文件被外部修改后拒绝覆盖 |
+| `/memory [all|ID]` | 查看显式项目记忆；all 包含失效记录 |
 | `/status` | 显示完整会话 ID、日志路径与待处理输入数 |
 | `/mode` 或 `/permissions` | 打开权限选择菜单；上下键选择、Enter 确认、Esc 取消 |
 | `/mode ask\|edit\|auto\|plan` | 直接切换权限模式，标题栏同步显示 |
@@ -195,3 +198,12 @@ pnpm run check:package
 源码借鉴与实现边界见 [architecture.md](docs/architecture.md)。当前重点是可靠的本地编码闭环；MCP 客户端、OAuth 持久认证、可执行插件、分布式协调、容器执行器和沙箱网络放行尚未实现。
 
 贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全边界见 [SECURITY.md](SECURITY.md)，发布步骤见 [releasing.md](docs/releasing.md)。本项目使用 [MIT 许可证](LICENSE)；依赖保留各自许可证，参考 [NOTICE](NOTICE)。
+
+
+## 显式项目记忆
+
+对 Loom 说“记住本项目使用 pnpm”，模型可用 `remember` 保存带来源的记录。写入沿用普通权限：ask 需要批准，edit/auto 自动执行，plan 不允许。模型指令要求只在用户显式要求时保存；当前没有后台自动提取，也不会每次启动都把全部记忆注入提示词。相关任务通过 `list_memories` 和 `get_memory` 召回，后者核验原始事件。来源序号可用 `search_history`/`read_history` 查找。
+
+`/memory` 查看有效记录，`/memory all` 包含失效记录，`/memory ID` 核验来源。支持项目或相对路径范围、过期时间、不可变修订及版本冲突检查。`forget_memory` 标记 stale 或 archived，保留修订历史，**不是物理删除**。来源哈希只能检测事件变化或缺失，不能证明当前代码仍然符合记忆。列表不核验来源，使用前应读取具体记录。
+
+`.loom/memory.sqlite` 是独立的权威存储，不能像历史缓存一样删除重建。备份元数据前先关闭 Loom；记录和源日志可能含私密信息，不要保存密钥。当前只在本工作区生效，不支持全局或跨 worktree 共享。取消或崩溃可能发生在数据库提交后、日志终态写入前，应先检查记录再决定是否重试。同会话、同调用 ID 的回执可以去重，不保证所有重试都 exactly-once。

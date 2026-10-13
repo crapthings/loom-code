@@ -3,12 +3,13 @@ import { open, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
+import { ShellExecutor } from '../execution/executor.js'
 
-// shellTool executes an explicitly approved host command with bounded output and process-tree cancellation.
-export function shellTool (cwd, session) {
+// shellTool executes an authorized isolated command with bounded output and process-tree cancellation.
+export function shellTool (cwd, session, executor = new ShellExecutor({ cwd })) {
   return {
     name: 'shell',
-    description: 'Run a host shell command after explicit approval; this is not an OS sandbox.',
+    description: `Run a shell command through ${executor.label}; permissions are enforced by the dispatcher.`,
     effect: 'shell',
     parallel: false,
     parameters: Type.Object({ command: Type.String({ minLength: 1 }), timeout: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) }),
@@ -16,7 +17,7 @@ export function shellTool (cwd, session) {
       signal.throwIfAborted()
       const artifact = `${randomUUID()}.txt`
       const output = await open(path.join(session.directory, artifact), 'wx', 0o600)
-      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|TOKEN|SECRET|PASSWORD)/i.test(key)))
+      let launch
       let child
       let timer
       let killTimer
@@ -30,7 +31,9 @@ export function shellTool (cwd, session) {
       }
       const abort = () => terminate('cancelled')
       try {
-        child = spawn(process.env.SHELL || '/bin/sh', ['-c', command], { cwd, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
+        launch = await executor.prepare(command, signal)
+        signal.throwIfAborted()
+        child = spawn(launch.command, launch.args, { cwd, env: launch.env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
         signal.addEventListener('abort', abort, { once: true })
         if (signal.aborted) abort()
         timer = setTimeout(() => terminate('timeout'), timeout * 1000)
@@ -43,7 +46,7 @@ export function shellTool (cwd, session) {
         }
         child.stdout.on('data', capture)
         child.stderr.on('data', capture)
-        emit({ type: 'tool.progress', text: `Host process ${child.pid} started` })
+        emit({ type: 'tool.progress', kind: 'process.started', boundary: launch.label, pid: child.pid, text: `${launch.label} process ${child.pid} started` })
         const code = await new Promise((resolve, reject) => {
           child.once('error', reject)
           child.once('close', resolve)
@@ -55,10 +58,11 @@ export function shellTool (cwd, session) {
         const preview = text.length > 12000 ? `${text.slice(0, 6000)}\n[... truncated ...]\n${text.slice(-6000)}` : text
         return { text: `exit: ${code}; status: ${stopped || 'completed'}; artifact: ${artifact}\n${preview}`, isError: Boolean(stopped) || code !== 0 }
       } finally {
+        if (child?.pid) killProcess(child, 'SIGKILL')
         clearTimeout(timer)
         clearTimeout(killTimer)
         signal.removeEventListener('abort', abort)
-        await output.close()
+        try { await output.close() } finally { await launch?.cleanup() }
       }
     }
   }

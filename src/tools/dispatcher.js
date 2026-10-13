@@ -9,8 +9,8 @@ import { checkpointTool } from './checkpoints.js'
 import { validateMode } from '../core/modes.js'
 
 // createTools assembles built-ins and optional delegation behind one dispatcher-compatible registry.
-export function createTools ({ cwd, session, delegate }) {
-  const tools = [...fileTools(cwd, session), shellTool(cwd, session), checkpointTool(cwd, session), {
+export function createTools ({ cwd, session, delegate, executor }) {
+  const tools = [...fileTools(cwd, session), shellTool(cwd, session, executor), checkpointTool(cwd, session), {
     name: 'read_artifact',
     description: 'Read a stored tool-output artifact by ID with a character offset.',
     effect: 'read',
@@ -39,6 +39,7 @@ export class Dispatcher {
     this.mode = validateMode(mode)
     this.approve = approve
     this.emit = emit
+    this.sessionGrants = new Set()
   }
 
   get declarations () {
@@ -64,9 +65,17 @@ export class Dispatcher {
       const args = validateToolArguments(tool, call)
       if (this.mode === 'plan' && tool.effect !== 'read') throw new Error('Plan mode denies side effects')
       if ((tool.effect === 'shell' && this.mode !== 'auto') || (tool.effect === 'write' && this.mode === 'ask')) {
-        const allowed = await this.approve({ call, effect: tool.effect, args, signal })
-        await this.session.append('permission.decided', { callId: call.id, allowed, effect: tool.effect })
+        const reused = this.sessionGrants.has(tool.name)
+        const decision = reused ? 'session' : await this.approve({ call, effect: tool.effect, args, signal })
+        const allowed = !signal.aborted && (decision === true || decision === 'session')
+        const scope = decision === 'session' ? 'session' : 'once'
+        await this.session.append('permission.decided', { callId: call.id, allowed, effect: tool.effect, tool: tool.name, scope, reused })
         if (!allowed) throw new Error('Permission denied; choose an allowed alternative')
+        signal.throwIfAborted()
+        if (scope === 'session' && !reused) {
+          this.sessionGrants.add(tool.name)
+          this.emit({ type: 'permission.granted', tool: tool.name })
+        }
       }
       signal.throwIfAborted()
       await this.session.append('tool.started', { call, source })

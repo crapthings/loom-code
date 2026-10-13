@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
+import { protectedNames, isCredentialPath, runtimeRoot } from '../execution/policy.js'
 
 // hashText identifies the exact UTF-8 file version observed by an agent.
 export function hashText (text) {
@@ -14,7 +15,8 @@ export async function resolveFile (cwd, input, create = false) {
   const file = path.resolve(root, input)
   const relative = path.relative(root, file)
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('Path is outside the workspace')
-  if (relative.split(path.sep).some(part => ['.git', '.loom'].includes(part))) throw new Error('Protected metadata path')
+  if (relative.split(path.sep).some(part => protectedNames.includes(part))) throw new Error('Protected metadata path')
+  if (isCredentialPath(relative)) throw new Error('Protected credential path')
   let canonical
   try {
     canonical = await realpath(file)
@@ -25,7 +27,9 @@ export async function resolveFile (cwd, input, create = false) {
   }
   const actual = path.relative(root, canonical)
   if (actual === '..' || actual.startsWith(`..${path.sep}`) || path.isAbsolute(actual)) throw new Error('Symlink resolves outside the workspace')
-  if (actual.split(path.sep).some(part => ['.git', '.loom'].includes(part))) throw new Error('Symlink resolves to protected metadata')
+  if (actual.split(path.sep).some(part => protectedNames.includes(part))) throw new Error('Symlink resolves to protected metadata')
+  if (isCredentialPath(actual)) throw new Error('Symlink resolves to protected credentials')
+  if (create && (canonical === runtimeRoot || canonical.startsWith(`${runtimeRoot}${path.sep}`))) throw new Error('The running Loom installation is protected from tool writes')
   return canonical
 }
 
@@ -125,7 +129,7 @@ async function walkFiles (cwd, input, signal) {
   while (pending.length && files.length < 5000) {
     signal.throwIfAborted()
     for (const entry of await readdir(pending.pop(), { withFileTypes: true })) {
-      if (['.git', '.loom', 'node_modules', 'vendor', 'dist', 'coverage'].includes(entry.name)) continue
+      if ([...protectedNames, 'node_modules', 'vendor', 'dist', 'coverage'].includes(entry.name) || isCredentialPath(entry.name)) continue
       const file = path.join(entry.parentPath, entry.name)
       if (entry.isDirectory()) pending.push(file)
       if (entry.isFile()) files.push(path.relative(cwd, file))

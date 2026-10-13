@@ -3,17 +3,41 @@
   "version": "0.1.0",
   "description": "A durable JavaScript coding agent with a terminal UI",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/crapthings/loom-code.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crapthings/loom-code.git"
+  },
   "homepage": "https://github.com/crapthings/loom-code#readme",
-  "bugs": { "url": "https://github.com/crapthings/loom-code/issues" },
+  "bugs": {
+    "url": "https://github.com/crapthings/loom-code/issues"
+  },
   "type": "module",
   "private": true,
   "exports": "./src/index.js",
-  "files": ["bin/", "src/", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "docs/architecture.md"],
-  "keywords": ["coding-agent", "cli", "tui", "agent", "javascript"],
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "NOTICE",
+    "docs/architecture.md",
+    "docs/sandbox.md"
+  ],
+  "keywords": [
+    "coding-agent",
+    "cli",
+    "tui",
+    "agent",
+    "javascript"
+  ],
   "packageManager": "pnpm@12.4.1",
-  "bin": { "loom": "bin/loom.js" },
-  "engines": { "node": ">=22.19.0" },
+  "bin": {
+    "loom": "bin/loom.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "start": "node bin/loom.js",
     "demo": "node bin/loom.js --demo",
@@ -23,8 +47,12 @@
     "check:package": "node scripts/check-package.js"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.79",
     "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0"
+    "@earendil-works/pi-tui": "1.1.0",
+    "zustand": "5.0.15"
   },
-  "devDependencies": { "standard": "17.1.2" }
+  "devDependencies": {
+    "standard": "17.1.2"
+  }
 }

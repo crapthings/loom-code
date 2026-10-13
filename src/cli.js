@@ -2,64 +2,76 @@ import { parseArgs } from 'node:util'
 import { realpath } from 'node:fs/promises'
 import { Agent } from './core/agent.js'
 import { Session } from './core/session.js'
-import { createModel, listModels, defaultProvider, defaultModels } from './model/provider.js'
+import { listSessions } from './core/session-list.js'
+import { selectSession } from './ui/session-picker.js'
+import { translate } from './ui/i18n.js'
+import { createModel, listModels, defaultProvider, defaultModel } from './model/provider.js'
 import { createDemoModel } from './model/demo.js'
 import { TerminalApp } from './ui/app.js'
 import { safeText } from './ui/theme.js'
-import { compatibleModels } from './model/compatible.js'
 import { validateMode } from './core/modes.js'
+import { sandboxStatus } from './execution/executor.js'
+import { LanguagePreferences } from './ui/preferences.js'
 
 // parseOptions validates command-line configuration before opening a session or entering raw mode.
 export function parseOptions (args, env = process.env) {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
     args,
     options: {
       demo: { type: 'boolean', default: false },
       cwd: { type: 'string', default: process.cwd() },
       session: { type: 'string' },
-      provider: { type: 'string' },
       model: { type: 'string' },
-      'base-url': { type: 'string' },
-      'context-window': { type: 'string', default: '32768' },
       mode: { type: 'string', default: 'ask' },
+      sandbox: { type: 'string', default: 'required' },
+      'sandbox-status': { type: 'boolean', default: false },
       steps: { type: 'string', default: '30' },
       reasoning: { type: 'string', default: 'off' },
       print: { type: 'string' },
       json: { type: 'boolean', default: false },
       models: { type: 'boolean', default: false },
       resume: { type: 'boolean', default: false },
+      last: { type: 'boolean', default: false },
+      list: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false }
     }
   })
+  const resumeCommand = positionals[0] === 'resume'
+  if (positionals.length && (!resumeCommand || positionals.length > 2)) throw new Error('Usage: loom resume [SESSION_ID] [--last | --list]')
+  if (positionals[1] && values.session) throw new Error('Specify a session ID only once')
+  if (positionals[1]) values.session = positionals[1]
+  if ((values.last || values.list) && !resumeCommand) throw new Error('--last and --list require loom resume')
+  if (values.last && (values.session || values.list)) throw new Error('--last cannot be combined with a session ID or --list')
+  if (values.list && (values.session || values.resume || values.print !== undefined)) throw new Error('--list cannot be combined with execution or session selection')
+  if (values.resume && !resumeCommand && !values.session) throw new Error('--resume requires --session ID; use loom resume to choose a session')
   validateMode(values.mode)
+  if (!['required', 'off'].includes(values.sandbox)) throw new Error('--sandbox must be required or off')
   const steps = Number(values.steps)
   if (!Number.isInteger(steps) || steps < 1 || steps > 500) throw new Error('--steps must be an integer from 1 to 500')
   if (!['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(values.reasoning)) throw new Error('Invalid --reasoning level')
-  const selected = values.provider || env.LOOM_PROVIDER || defaultProvider
-  const provider = selected === 'vercel' ? defaultProvider : selected
-  const model = values.model || env.LOOM_MODEL || defaultModels[provider]
-  const contextWindow = Number(values['context-window'])
-  if (!Number.isInteger(contextWindow) || contextWindow < 8192) throw new Error('--context-window must be an integer of at least 8192')
-  if (values['base-url'] && !values.model && !env.LOOM_MODEL) throw new Error('--base-url requires an explicit --model')
-  if (!values.demo && !values.help && !values.models && !model) throw new Error('Specify --model for this provider')
-  return { ...values, provider, model, steps, contextWindow }
+  if (env.LOOM_PROVIDER && !['vercel', defaultProvider].includes(env.LOOM_PROVIDER)) throw new Error('Only Vercel AI Gateway is supported; remove LOOM_PROVIDER')
+  const model = values.model || env.LOOM_MODEL || defaultModel
+  return { ...values, provider: defaultProvider, model, steps, resumeCommand }
 }
 
 // helpText documents both interactive usage and deterministic headless execution.
 export const helpText = `Loom Code — durable coding-agent orchestration in JavaScript
 
 Usage: loom [options]
+       loom resume [SESSION_ID] [--last | --list] [options]
 
   --demo                   Offline model; real file tools and orchestration
   --cwd DIRECTORY          Workspace (default: current directory)
-  --provider NAME          Pi provider; default: vercel-ai-gateway (alias: vercel)
   --model ID               Model identifier (or LOOM_MODEL)
-  --base-url URL           OpenAI-compatible endpoint; optional LOOM_API_KEY
-  --context-window N       Compatible endpoint context size (default: 32768)
-  --models                 List chat models, optionally filtered by provider
+  --models                 List Vercel AI Gateway chat models
   --mode ask|edit|auto|plan Initial permissions; switch with /mode in the TUI
+  --sandbox required|off   Mandatory OS sandbox (default) or explicit host execution
+  --sandbox-status         Check sandbox platform and dependencies without API calls
   --session ID             Reopen a saved workspace session
-  --resume                 Explicitly resume interrupted or recovered work
+  --resume                 Explicitly execute unfinished work in a selected session
+  --last                   Open the most recent available session (loom resume)
+  --list                   List workspace sessions; --json for JSON (loom resume)
   --steps N                Shared model-call allowance (default: 30)
   --reasoning LEVEL        off|minimal|low|medium|high|xhigh
   --print TASK             Run without a TUI; shell approval is denied
@@ -67,37 +79,66 @@ Usage: loom [options]
   --help                   Show this help
 
 Interactive: Enter steers, /queue schedules, Esc interrupts, /help lists commands.
-API credentials resolve through the selected provider's environment variables.
+Interface: English by default; /language selects and saves en or zh-CN.
+API requests use Vercel AI Gateway with AI_GATEWAY_API_KEY.
 Default: Vercel AI Gateway / deepseek/deepseek-v4.1-flash; set AI_GATEWAY_API_KEY.
-LOOM_PROVIDER and LOOM_MODEL override the defaults.
+LOOM_MODEL overrides the default model.
 Shell commands require approval in ask/edit; auto permits host execution without prompts.
+Shell sandbox defaults to required, with network denied and no unsandboxed fallback.
 `
 
 // main builds one runtime for either the terminal interface or the headless event stream.
 export async function main (args = process.argv.slice(2)) {
   const options = parseOptions(args)
   if (options.help) { process.stdout.write(helpText); return }
-  if (options.models) { process.stdout.write(`${listModels(args.includes('--provider') ? options.provider : undefined).join('\n')}\n`); return }
-  if (!options.demo && !options['base-url'] && options.provider === defaultProvider && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway, or choose --provider / --base-url explicitly')
+  if (options['sandbox-status']) { const status = await sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
+  if (options.models) { process.stdout.write(`${listModels().join('\n')}\n`); return }
+  if (!options.resumeCommand && !options.demo && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
+  const cwd = await realpath(options.cwd)
+  const preferences = new LanguagePreferences()
+  if (options.resumeCommand) {
+    if (!options.session && !options.last && (options.resume || options.print !== undefined) && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error('Headless execution requires a session ID or --last')
+    const catalog = await listSessions(cwd)
+    if (options.list || (!options.session && !options.last && (!process.stdin.isTTY || !process.stdout.isTTY))) {
+      if (options.json) process.stdout.write(`${JSON.stringify(catalog, null, 2)}\n`)
+      else {
+        for (const session of catalog.sessions) process.stdout.write(`${session.id}\t${new Date(session.updated).toISOString()}\t${session.busy ? 'busy' : session.status}\t${safeText(session.title)}\n`)
+        if (!catalog.sessions.length) process.stdout.write('No saved sessions in this workspace.\n')
+        if (catalog.skipped) process.stderr.write(`Skipped ${catalog.skipped} unreadable or invalid sessions.\n`)
+      }
+      return
+    }
+    if (catalog.skipped) process.stderr.write(`Skipped ${catalog.skipped} unreadable or invalid sessions.\n`)
+    if (options.last) options.session = catalog.sessions.find(session => !session.busy)?.id
+    else if (!options.session) options.session = await selectSession(catalog.sessions, { language: await preferences.load() })
+    if (!options.session) {
+      if (!catalog.sessions.some(session => !session.busy)) process.stdout.write(`${translate(await preferences.load(), 'session.none')}\n`)
+      return
+    }
+    const selected = catalog.sessions.find(session => session.id === options.session)
+    if (!selected) throw new Error('Saved root session not found in this workspace')
+    if (selected.busy) throw new Error('Session is already open in another process')
+  }
+  if (!options.demo && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
   const headless = options.print !== undefined || (options.resume && !process.stdin.isTTY)
   if (options.json && !headless) throw new Error('--json requires --print or headless --resume')
   if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error('Interactive mode needs a terminal; use --print TASK or --demo --print TASK')
-  const cwd = await realpath(options.cwd)
-  const collection = options['base-url'] ? compatibleModels(options['base-url'], options.model, options.contextWindow) : undefined
-  const model = options.demo ? createDemoModel() : createModel({ ...options, collection, provider: collection ? 'compatible' : options.provider })
-  const session = await Session.open(cwd, options.session)
+  const model = options.demo ? createDemoModel() : createModel(options)
+  const language = headless ? 'en' : await preferences.load()
+  const session = await Session.open(cwd, options.session, { existing: options.resumeCommand })
   let agent
   let app
   const shutdown = () => app ? app.shutdown().catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1 }) : agent.interrupt()
   try {
-    if (!headless) app = new TerminalApp({ cwd, session, model, mode: options.mode })
+    if (!headless) app = new TerminalApp({ cwd, session, model, mode: options.mode, sandbox: options.sandbox, language, saveLanguage: language => preferences.save(language) })
     const emit = event => {
       if (app) return app.event(event)
       if (options.json) process.stdout.write(`${JSON.stringify(event)}\n`)
       else if (event.type === 'assistant.end' && !event.child) process.stdout.write(`${safeText(event.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n'))}\n`)
       else if (event.type === 'error') process.stderr.write(`${safeText(event.text)}\n`)
+      else if (event.type === 'resume.skipped') process.stdout.write(`${event.text}\n`)
     }
-    agent = new Agent({ cwd, session, model, mode: options.mode, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
+    agent = new Agent({ cwd, session, model, mode: options.mode, sandbox: options.sandbox, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
     app?.bind(agent)
     await agent.initialize()
     process.on('SIGINT', shutdown)

@@ -6,10 +6,11 @@ import { createTools, Dispatcher } from '../tools/dispatcher.js'
 import { discoverSkills, skillTool } from './skills.js'
 import { latestCheckpoint } from '../tools/checkpoints.js'
 import { validateMode } from './modes.js'
+import { ShellExecutor } from '../execution/executor.js'
 
 // Agent coordinates durable input, model steps, tools, and read-only child sessions.
 export class Agent {
-  constructor ({ cwd, session, model, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget }) {
+  constructor ({ cwd, session, model, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget, sandbox = 'required', executor = new ShellExecutor({ cwd, sandbox }) }) {
     this.cwd = cwd
     this.session = session
     this.model = model
@@ -17,6 +18,7 @@ export class Agent {
     this.emit = emit
     this.steps = steps
     this.depth = depth
+    this.executor = executor
     this.sharedBudget = budget
     this.running = null
     this.controller = null
@@ -24,7 +26,7 @@ export class Agent {
     this.closed = false
     this.status = 'idle'
     const delegate = depth === 0 ? (args, context) => this.delegate(args, context) : undefined
-    this.dispatcher = new Dispatcher({ session, mode, approve, emit, tools: createTools({ cwd, session, delegate }) })
+    this.dispatcher = new Dispatcher({ session, mode, approve, emit, tools: createTools({ cwd, session, delegate, executor }) })
   }
 
   async initialize () {
@@ -35,6 +37,8 @@ export class Agent {
     this.dispatcher.tools.push(skillTool(skills))
     this.skillInstructions = skills.length ? `\nAvailable project skills (use load_skill to read instructions):\n${skills.map(skill => `${skill.name}: ${skill.description}`).join('\n')}` : ''
     this.system += this.skillInstructions
+    this.executionInstructions = `\nShell execution: ${this.executor.label}. Sandbox failures are tool errors, never authorization to bypass isolation. Network-denied shell commands cannot install dependencies from the internet. Model requests run outside the shell sandbox.`
+    this.system += this.executionInstructions
     this.emit({ type: 'status', text: this.status })
   }
 
@@ -69,7 +73,7 @@ export class Agent {
   async drain (signal) {
     this.status = 'running'
     const runId = randomUUID()
-    await this.session.append('run.started', { runId, model: this.model.label, mode: this.mode })
+    await this.session.append('run.started', { runId, model: this.model.label, mode: this.mode, execution: this.executor.label })
     this.emit({ type: 'status', text: this.status })
     try {
       let continuing = false
@@ -124,6 +128,7 @@ export class Agent {
     signal.addEventListener('abort', abort, { once: true })
     try {
       signal.throwIfAborted()
+      await session.append('session.parent', { parentId: this.session.id, role })
       await this.session.append('agent.spawned', { childId: session.id, role, task })
       await child.initialize()
       child.system += `\nYour role is ${role}; return concise findings with file references and evidence. Do not modify files.`
@@ -153,17 +158,32 @@ export class Agent {
       await this.session.append('permission.mode', { previous: this.mode, mode })
       this.mode = mode
       this.dispatcher.mode = mode
-      this.system = system + this.skillInstructions
+      this.dispatcher.sessionGrants.clear()
+      this.system = system + this.skillInstructions + this.executionInstructions
       this.emit({ type: 'mode.changed', mode })
     })
   }
 
   async resume () {
-    if (this.running) return
+    if (this.closed) throw new Error('Agent has closed')
+    if (this.resuming) return this.resuming
+    if (this.running) return false
+    this.resuming = this.resumeWork()
+    try { return await this.resuming } finally { this.resuming = null }
+  }
+
+  async resumeWork () {
+    const unfinished = this.session.unfinished || this.blocked
+    if (!unfinished && !this.session.pending.length) {
+      this.emit({ type: 'resume.skipped', text: 'No unfinished task to resume. Submit a new task to start work.' })
+      return false
+    }
     if (this.blocked) await this.session.append('recovery.acknowledged')
     this.blocked = false
-    if (!this.session.pending.length) await this.session.append('inbox.enqueued', { inputId: randomUUID(), delivery: 'steer', text: 'Continue the original task from recorded evidence; inspect unknown or partial outcomes before retrying.' })
+    if (unfinished) await this.session.append('inbox.enqueued', { inputId: randomUUID(), delivery: 'steer', text: 'Continue only the unfinished original task from recorded evidence. Keep completed work; do not repeat successful tool calls. Inspect the workspace and unknown or partial outcomes before deciding whether any retry is necessary.' })
+    if (this.closed) return false
     this.wake()
+    return true
   }
 
   async compact () {
@@ -210,6 +230,7 @@ export class Agent {
   async close () {
     this.closed = true
     this.interrupt()
+    await this.resuming
     await this.wait()
     await this.session.close()
   }

@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Agent } from '../src/core/agent.js'
+import { Session } from '../src/core/session.js'
 import { Budget } from '../src/core/budget.js'
 import { compactContext, contextMessages } from '../src/core/context.js'
 import { agentFixture, call, deferred, fakeModel, fixture, response } from './helpers.js'
@@ -17,6 +18,87 @@ test('agent executes tools and feeds paired results into the next model step', a
   assert.equal(model.requests[1].messages.at(-1).toolCallId, 'call-1')
   assert.equal(session.pending.length, 0)
   assert.equal(session.events.filter(event => event.type === 'run.finished').length, 1)
+})
+
+test('continue on fresh or reopened completed sessions never starts a model call or adds input', async t => {
+  const { cwd, session, agent, model, events } = await agentFixture(t, [response('Completed')])
+  const before = session.events.length
+  assert.equal(await agent.resume(), false)
+  assert.equal(session.events.length, before)
+  assert.equal(model.requests.length, 0)
+  assert.equal(events.at(-1).type, 'resume.skipped')
+  await agent.enqueue('Original task')
+  await agent.wait()
+  await agent.close()
+  const reopened = await Session.open(cwd, session.id)
+  const nextModel = fakeModel([])
+  const next = new Agent({ cwd, session: reopened, model: nextModel })
+  t.after(() => next.close())
+  await next.initialize()
+  const count = reopened.events.length
+  assert.equal(reopened.unfinished, false)
+  assert.equal(await next.resume(), false)
+  assert.equal(reopened.events.length, count)
+  assert.equal(nextModel.requests.length, 0)
+  await next.close()
+})
+
+test('restart resumes failed work once with prior tool evidence before queued tasks', async t => {
+  const { cwd, session, agent, model } = await agentFixture(t, [response([call('list_files')], 'toolUse'), () => { throw new Error('Disconnected') }])
+  await agent.enqueue('Inspect original task')
+  await agent.wait()
+  assert.equal(session.unfinished, true)
+  assert.equal(model.requests.length, 2)
+  await session.append('inbox.enqueued', { inputId: 'future', text: 'Next task', delivery: 'queue' })
+  await agent.close()
+  const reopened = await Session.open(cwd, session.id)
+  const nextModel = fakeModel([response('Original finished'), response('Next finished')])
+  const next = new Agent({ cwd, session: reopened, model: nextModel })
+  t.after(() => next.close())
+  await next.initialize()
+  assert.equal(nextModel.requests.length, 0)
+  await Promise.all([next.resume(), next.resume()])
+  await next.wait()
+  assert.equal(nextModel.requests.length, 2)
+  assert.ok(nextModel.requests[0].messages.some(message => message.role === 'toolResult' && message.toolCallId === 'call-1'))
+  assert.ok(!nextModel.requests[0].messages.some(message => message.content === 'Next task'))
+  assert.ok(nextModel.requests[1].messages.some(message => message.content === 'Next task'))
+  assert.equal(reopened.events.filter(event => event.type === 'inbox.enqueued' && event.text.startsWith('Continue only')).length, 1)
+  assert.equal(reopened.events.filter(event => event.type === 'tool.started').length, 1)
+  assert.equal(reopened.unfinished, false)
+  assert.equal(await next.resume(), false)
+  await next.close()
+})
+
+test('continue delivers saved inputs without fabricating an original task', async t => {
+  const { agent, session, model } = await agentFixture(t, [response('Saved task completed')])
+  await session.append('inbox.enqueued', { inputId: 'saved', text: 'Saved task', delivery: 'queue' })
+  assert.equal(await agent.resume(), true)
+  await agent.wait()
+  assert.equal(model.requests.length, 1)
+  assert.deepEqual(model.requests[0].messages.map(message => message.content), ['Saved task'])
+  assert.equal(session.pending.length, 0)
+})
+
+test('crashed runs remain resumable after recovery without replaying their delivered input', async t => {
+  const { cwd, session } = await fixture(t)
+  await session.append('run.started', { runId: 'crashed' })
+  await session.append('inbox.enqueued', { inputId: 'original', text: 'Original task', delivery: 'steer' })
+  await session.append('inbox.delivered', { inputId: 'original', message: { role: 'user', content: 'Original task', timestamp: 1 } })
+  await session.close()
+  const reopened = await Session.open(cwd, session.id)
+  const model = fakeModel([response('Finished remaining work')])
+  const agent = new Agent({ cwd, session: reopened, model })
+  t.after(() => agent.close())
+  await agent.initialize()
+  assert.equal(reopened.unfinished, true)
+  assert.equal(model.requests.length, 0)
+  await agent.resume()
+  await agent.wait()
+  assert.equal(model.requests[0].messages.filter(message => message.content === 'Original task').length, 1)
+  assert.match(model.requests[0].messages.at(-1).content, /do not repeat successful tool calls/)
+  assert.equal(reopened.unfinished, false)
+  await agent.close()
 })
 
 test('ask mode exposes file writing and completes an approved artifact request through the agent', async t => {
@@ -46,7 +128,7 @@ test('ask mode preserves an approval denial without creating the requested file'
 })
 
 test('auto mode executes file and shell tools without approval and still confines file paths', async t => {
-  const { agent, cwd, session } = await agentFixture(t, [response([call('write_file', { path: 'automatic.txt', content: 'done' }), call('shell', { command: 'node -e "process.stdout.write(123)"' }, 'shell-auto')], 'toolUse'), response('Done')], {
+  const { agent, cwd, session } = await agentFixture(t, [response([call('write_file', { path: 'automatic.txt', content: 'done' }), call('shell', { command: 'node -e "console.log(123)"' }, 'shell-auto')], 'toolUse'), response('Done')], {
     mode: 'auto', approve: async () => { throw new Error('Auto mode must not prompt') }
   })
   await agent.enqueue('Create and verify a file')
@@ -54,6 +136,9 @@ test('auto mode executes file and shell tools without approval and still confine
   assert.equal(agent.status, 'idle')
   assert.equal(await readFile(path.join(cwd, 'automatic.txt'), 'utf8'), 'done')
   assert.equal(session.events.some(event => event.type === 'permission.decided'), false)
+  const shellResult = session.events.find(event => event.type === 'tool.finished' && event.message?.toolCallId === 'shell-auto')
+  assert.equal(shellResult.message.isError, false, JSON.stringify(shellResult.message.content))
+  assert.match(shellResult.message.content[0].text, /123/)
   const denied = await agent.dispatcher.run(call('write_file', { path: '../escape.txt', content: 'bad' }), new AbortController().signal)
   assert.equal(denied.isError, true)
 })

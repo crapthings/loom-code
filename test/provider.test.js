@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai'
-import { createModel } from '../src/model/provider.js'
-import { compatibleModels } from '../src/model/compatible.js'
+import { createModels, createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai'
+import { createModel, listModels } from '../src/model/provider.js'
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -20,24 +20,28 @@ test('default routing uses Vercel regardless of unrelated provider credentials',
   assert.equal(createModel().label, model.label)
 })
 
-test('explicit provider and model selections override the Vercel defaults', () => {
-  assert.equal(parseOptions(['--provider', 'vercel'], {}).provider, 'vercel-ai-gateway')
-  assert.equal(parseOptions(['--provider', 'openai'], {}).model, 'gpt-5.4')
-  assert.equal(parseOptions([], { LOOM_PROVIDER: 'anthropic' }).model, 'claude-sonnet-4-6')
+test('only Vercel routing is admitted while model selection remains configurable', () => {
+  assert.throws(() => parseOptions(['--provider', 'openai'], {}), /Unknown option/)
+  assert.throws(() => parseOptions(['--base-url', 'http://localhost/v1'], {}), /Unknown option/)
+  assert.throws(() => parseOptions(['--context-window', '64000'], {}), /Unknown option/)
+  assert.throws(() => parseOptions([], { LOOM_PROVIDER: 'anthropic' }), /Only Vercel/)
+  assert.throws(() => createModel({ provider: 'openai', model: 'gpt-5.4' }), /Only Vercel/)
   assert.equal(parseOptions(['--model', 'openai/gpt-5.4'], { LOOM_MODEL: 'other' }).model, 'openai/gpt-5.4')
-  assert.equal(parseOptions(['--base-url', 'http://localhost/v1', '--model', 'local'], {}).model, 'local')
-  assert.throws(() => parseOptions(['--base-url', 'http://localhost/v1'], {}), /explicit --model/)
+  assert.equal(parseOptions([], { LOOM_MODEL: 'openai/gpt-5.4' }).model, 'openai/gpt-5.4')
+  const models = listModels()
+  assert.ok(models.length > 0)
+  assert.ok(models.every(model => model.startsWith('vercel-ai-gateway/')))
 })
 
 test('missing Vercel credentials fail before opening a workspace or entering the TUI', async t => {
   const previous = process.env.AI_GATEWAY_API_KEY
   delete process.env.AI_GATEWAY_API_KEY
   t.after(() => { if (previous === undefined) delete process.env.AI_GATEWAY_API_KEY; else process.env.AI_GATEWAY_API_KEY = previous })
-  await assert.rejects(main(['--provider', 'vercel', '--cwd', '/does-not-exist', '--print', 'Inspect']), /Set AI_GATEWAY_API_KEY/)
+  await assert.rejects(main(['--cwd', '/does-not-exist', '--print', 'Inspect']), /Set AI_GATEWAY_API_KEY/)
 })
 
 test('real Pi adapter streams text and preserves tool-call envelopes without paid APIs', async () => {
-  const faux = fauxProvider()
+  const faux = fauxProvider({ provider: 'vercel-ai-gateway' })
   faux.setResponses([fauxAssistantMessage([fauxText('Evidence'), fauxToolCall('list_files', {})], { stopReason: 'toolUse' })])
   const collection = createModels()
   collection.setProvider(faux.provider)
@@ -50,14 +54,21 @@ test('real Pi adapter streams text and preserves tool-call envelopes without pai
   assert.equal(result.content.find(part => part.type === 'toolCall').name, 'list_files')
 })
 
-test('compatible endpoints validate URL configuration and retain their explicit context window', () => {
-  assert.throws(() => compatibleModels('file:///tmp/key', 'test'), /HTTP/)
-  assert.throws(() => compatibleModels('http://user:secret@localhost/v1', 'test'), /credentials/)
-  const collection = compatibleModels('http://localhost:11434/v1', 'local-model', 64000)
-  assert.equal(createModel({ collection, provider: 'compatible', model: 'local-model' }).contextWindow, 64000)
-})
+// localModels injects an offline HTTP transport to test stream and tool contracts without exposing endpoint configuration.
+function localModels (baseUrl) {
+  const models = createModels()
+  models.setProvider(createProvider({
+    id: 'vercel-ai-gateway',
+    name: 'Offline test transport',
+    baseUrl,
+    auth: { apiKey: { name: 'test', resolve: async () => ({ auth: { apiKey: 'offline-test' } }) } },
+    models: [{ id: 'local-model', name: 'local-model', api: 'openai-completions', provider: 'vercel-ai-gateway', baseUrl, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 8192 }],
+    api: openAICompletionsApi()
+  }))
+  return models
+}
 
-test('compatible HTTP adapter sends a streaming request and decodes a local SSE response', async t => {
+test('injected offline HTTP adapter sends a streaming request and decodes a local SSE response', async t => {
   let request
   const server = createServer(async (req, res) => {
     let text = ''
@@ -71,8 +82,8 @@ test('compatible HTTP adapter sends a streaming request and decodes a local SSE 
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
-  const collection = compatibleModels(`http://127.0.0.1:${server.address().port}/v1`, 'local-model')
-  const model = createModel({ collection, provider: 'compatible', model: 'local-model' })
+  const collection = localModels(`http://127.0.0.1:${server.address().port}/v1`)
+  const model = createModel({ collection, provider: 'vercel-ai-gateway', model: 'local-model' })
   let text = ''
   const result = await model.complete({ system: 'Inspect', messages: [{ role: 'user', content: 'Task', timestamp: 1 }], tools: [] }, { signal: new AbortController().signal, onDelta: delta => { text += delta } })
   assert.equal(result.stopReason, 'stop', result.errorMessage)
@@ -100,8 +111,8 @@ test('real HTTP tool calls create a file and feed the committed result back to t
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
-  const collection = compatibleModels(`http://127.0.0.1:${server.address().port}/v1`, 'local-model')
-  const model = createModel({ collection, provider: 'compatible', model: 'local-model' })
+  const collection = localModels(`http://127.0.0.1:${server.address().port}/v1`)
+  const model = createModel({ collection, provider: 'vercel-ai-gateway', model: 'local-model' })
   const agent = new Agent({ cwd, session, model, mode: 'edit' })
   await agent.initialize()
   await agent.enqueue('Create the example file')

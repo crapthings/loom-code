@@ -10,10 +10,10 @@ TerminalApp / headless JSON / SDK
        ▼
 Agent: 单会话协调、step、预算、取消、委托
        ├── Context: 指令、skill 索引、模型视图、压缩
-       ├── Model: Pi provider 或离线模型
+       ├── Model: Vercel AI Gateway 或离线模型
        └── Dispatcher: 校验 → 授权 → 记录意图 → 执行 → 记录结果
                        ├── 文件与版本检查点
-                       ├── 主机 Shell 与输出 artifact
+                       ├── ShellExecutor → OS 沙箱与输出 artifact
                        └── 只读子代理
        │
        ▼
@@ -21,6 +21,16 @@ Session: 有序 JSONL、fsync、输入与结果投影、恢复
 ```
 
 UI 不调用工具实现，工具不依赖终端，模型适配不负责运行循环。每次模型请求从持久记录重新投影；流式增量是临时展示，完整 assistant envelope 才进入执行历史。只有完整响应结束后执行工具，牺牲少量流式重叠以简化截断和恢复边界。
+
+## 界面状态与执行状态
+
+`src/ui/store.js` 使用固定版本 `zustand/vanilla`，每个 TerminalApp 创建独立实例，不依赖 React。通过 `dispatch(event)` 更新语言、权限模式显示、状态、预算数字快照、临时流式文本、待处理输入与弹窗元数据；`uiTransition` 是纯投影，不调用模型、工具或文件系统。`getState` 和 `subscribe` 用于读取与渲染，渲染方不修改返回的 Map 和对象。
+
+TerminalApp 保留终端组件、弹窗句柄、Promise 与关闭流程。订阅按字段变化更新标题、补全和底栏；流式文本只更新对应 Markdown 组件。消息完成或输入投递后删除临时状态；关闭界面时释放订阅与组件引用。`closing` 期间仍接收执行收尾事件，`closed` 后忽略迟到事件与操作；异步语言保存完成后会再次检查关闭状态。相同语言、模式和不存在的弹窗关闭操作不触发订阅。可变 Budget 不直接进入 store，外部修改数字不会悄悄改变旧的显示快照。
+
+Agent 继续拥有执行生命周期，Dispatcher 继续拥有授权，Session 的 JSONL 继续负责持久事实与崩溃恢复。UI 中的模式只是执行事件的投影，用户切换仍通过 `agent.setMode()`；语言保存成功后才提交 UI 变化。store 不持久化会话授权、进程、AbortController、未完成流式文本或执行状态。
+
+当前选择 [Zustand vanilla](https://github.com/pmndrs/zustand#using-zustand-without-react)，因为所需的是简单可订阅的界面数据，且可用稳定接口封装依赖。[XState Store](https://stately.ai/docs/xstate-store) 的事件与纯转换也适合这一层；[XState actors](https://stately.ai/docs/actors) 适合以后明确表达执行状态转换和子任务生命周期，届时仍需保留日志提交、取消结算和未知副作用恢复约束。[MobX](https://mobx.js.org/observable-state.html) 更适合观察大量类对象；[Redux](https://redux.js.org/introduction/getting-started) 的 reducer/action 结构适合更多客户端共享事件协议。暂不同时引入多个库。
 
 ## 参考实现到我们的机制
 
@@ -68,9 +78,15 @@ Budget 独立于消息列表和 compaction。父代理、子代理、摘要与�
 
 ## 接下来的扩展位置
 
-- **OS 沙箱**：把 shell execute 换成受限制的 Executor，明确网络和文件系统策略，保留同一 Dispatcher 授权入口。
+- **执行隔离**：ShellExecutor 已通过 sandbox-runtime 接入 Seatbelt/bubblewrap，默认禁止网络且失败不降级；下一步加入受审计的网络放行、资源限制和容器执行器，见 [sandbox.md](sandbox.md)。
 - **MCP**：将发现的工具转换为 registry 项；schema、授权、取消、输出和日志仍必须走 Dispatcher。
 - **复杂插件**：先决定信任和隔离边界；当前不加载可以直接访问宿主的任意 hooks。
 - **OAuth**：向 Pi Models 注入持久 credential store，登录 UI 与凭据存储分离。
 - **跨进程执行**：替换 PID 锁和进程内协调，设计租约、fencing 及外部副作用幂等键；不能只把 JSONL 换成数据库就声称分布式安全。
 - **可靠性评测**：除最终答案外，统计输入丢失、重复副作用、工具终态完整率、中断延迟、验证证据和单位成功成本。
+
+## 历史会话选择
+
+`listSessions` 只读取当前工作区 `.loom/sessions`，不调用 `Session.open`，因此列出不会获取写锁、截断日志或重置运行状态。先按工作区与主会话过滤，再按最后记录时间降序排列。原生选择器只允许选择未占用会话；真正打开仍依赖独占锁，并使用 `existing: true` 防止选中会话消失时误建新会话。启动选择器只持有临时终端组件，结束后销毁，不需要把启动状态并入运行中的 Zustand store。
+
+参考本地源码：Pi 的 `packages/coding-agent/src/cli/session-picker.ts` 将启动选择器与执行界面分开；Codex 的 `codex-rs/cli/src/main.rs` 中 `ResumeCommand` 提供选择器、指定 ID、`--last` 与当前目录过滤；OpenCode 的 `packages/cli/src/commands/handlers/session/list.ts` 按项目、`parentID: null`、更新时间倒序列出，提供表格和 JSON。Loom 先实现当前项目范围，不提供全局跨项目查找或会话 fork。

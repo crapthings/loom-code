@@ -1,6 +1,6 @@
 # Security
 
-Loom 0.1 is an early local coding-agent implementation. It is intended for workspaces and host environments you control. OS sandboxing is not implemented.
+Loom 0.1 is an early local coding-agent implementation. It is intended for workspaces and host environments you control. Shell isolation is mandatory by default through sandbox-runtime 0.0.79: Seatbelt on macOS and bubblewrap on Linux. The old v0.1.0 release predates this change; consult the version you actually run.
 
 ## Permission boundaries
 
@@ -11,9 +11,11 @@ Loom 0.1 is an early local coding-agent implementation. It is intended for works
 | `auto` | Allowed | Allowed without prompts |
 | `plan` | Denied | Denied |
 
-File tools confine paths to the workspace and protect `.git/` and `.loom/`. These checks do not sandbox shell commands, prevent malicious local races, or constrain a child process's network access. A model's response is not an enforcement boundary; the dispatcher enforces permissions.
+Permission modes do not disable isolation. `--sandbox required` limits shell writes, denies personal directories and common credential files, protects the runtime and metadata, and denies network access. Missing/degraded dependencies or policy setup errors block the command without host fallback. Only an explicit CLI `--sandbox off` opts out. Model API traffic and file tools run outside the shell sandbox.
 
-Shell subprocesses omit environment variable names containing `API_KEY`, `TOKEN`, `SECRET`, or `PASSWORD`, but this is not a general credential isolation guarantee. Sessions, file checkpoints, and tool artifacts under `.loom/` can contain sensitive workspace content. Keep that directory out of version control and inspect logs before sharing them.
+File tools separately confine paths and deny common credential files and metadata. They do not prevent malicious local races or hard-link attacks. Reads by shell processes are not a strict workspace-only whitelist: system runtime files remain readable, while personal and temporary directories are denied with explicit carve-outs. The sandbox is not a VM, CPU/memory/disk quota, or a formal guarantee against every escape. macOS process-group cleanup does not guarantee tracking deliberately detached descendants. See [sandbox.md](docs/sandbox.md).
+
+Shell environments are built from an allowlist and use an isolated temporary home/cache. They do not inherit model credentials, database URLs, SSH agent sockets, or executable startup hooks. Secrets can still exist in ordinary project files; protected filename rules are not a universal secret detector. Sessions, file checkpoints, and tool artifacts under `.loom/` can contain sensitive workspace content. Keep that directory out of version control and inspect logs before sharing them.
 
 ## Reporting
 

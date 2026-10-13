@@ -1,0 +1,77 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createUiStore } from '../src/ui/store.js'
+
+test('UI stores isolate instances and preserve snapshots across streaming and queue delivery', () => {
+  const first = createUiStore()
+  const second = createUiStore()
+  first.dispatch({ type: 'ui.language', language: 'zh-CN' })
+  assert.equal(second.getState().language, 'en')
+  first.dispatch({ type: 'queued', inputId: 'input', delivery: 'steer', text: 'task' })
+  first.dispatch({ type: 'assistant.start', stepId: 'step' })
+  const before = first.getState()
+  first.dispatch({ type: 'assistant.delta', stepId: 'step', text: 'hello' })
+  assert.equal(before.streams.get('step'), '')
+  assert.equal(first.getState().streams.get('step'), 'hello')
+  first.dispatch({ type: 'user', inputId: 'input', text: 'task' })
+  assert.equal(before.queued.has('input'), true)
+  assert.equal(first.getState().queued.size, 0)
+  first.dispatch({ type: 'assistant.end', stepId: 'step' })
+  first.dispatch({ type: 'assistant.delta', stepId: 'step', text: 'late' })
+  assert.equal(first.getState().streams.size, 0)
+  assert.equal(second.getState().streams.size, 0)
+})
+
+test('UI projections copy budget counters and ignore delegated events and unknown updates', () => {
+  const store = createUiStore()
+  const budget = { calls: 2, tokens: 30, cost: 0.01 }
+  store.dispatch({ type: 'status', text: 'running', budget })
+  budget.tokens = 50
+  assert.equal(store.getState().budget.tokens, 30)
+  store.dispatch({ type: 'status', text: 'running', budget })
+  assert.equal(store.getState().budget.tokens, 50)
+  const before = store.getState()
+  store.dispatch({ type: 'mode.changed', mode: 'auto', child: 'child' })
+  store.dispatch({ type: 'unknown' })
+  assert.equal(store.getState(), before)
+})
+
+test('dialog projections track independent overlays and disposal clears transient data', () => {
+  const store = createUiStore()
+  store.dispatch({ type: 'ui.dialog.opened', dialog: { id: 'approval', kind: 'approval', callId: 'tool-1' } })
+  store.dispatch({ type: 'ui.dialog.opened', dialog: { id: 'language', kind: 'language' } })
+  store.dispatch({ type: 'ui.dialog.closed', id: 'approval' })
+  assert.deepEqual(store.getState().dialogs.map(dialog => dialog.id), ['language'])
+  store.dispatch({ type: 'queued', inputId: 'input', text: 'task' })
+  store.dispatch({ type: 'assistant.start', stepId: 'step' })
+  store.dispatch({ type: 'ui.closing' })
+  store.dispatch({ type: 'ui.closed' })
+  assert.equal(store.getState().closing, true)
+  assert.equal(store.getState().queued.size, 0)
+  assert.equal(store.getState().streams.size, 0)
+  assert.deepEqual(store.getState().dialogs, [])
+  assert.equal(store.getState().closed, true)
+  const closed = store.getState()
+  store.dispatch({ type: 'assistant.start', stepId: 'late' })
+  store.dispatch({ type: 'ui.language', language: 'zh-CN' })
+  store.dispatch({ type: 'ui.dialog.opened', dialog: { id: 'late' } })
+  assert.equal(store.getState(), closed)
+})
+
+test('unchanged display actions do not notify subscribers while closing still accepts settlement events', () => {
+  const store = createUiStore()
+  let updates = 0
+  const unsubscribe = store.subscribe(() => updates++)
+  store.dispatch({ type: 'ui.language', language: 'en' })
+  store.dispatch({ type: 'mode.changed', mode: 'ask' })
+  store.dispatch({ type: 'ui.dialog.closed', id: 'missing' })
+  assert.equal(updates, 0)
+  store.dispatch({ type: 'assistant.start', stepId: 'step' })
+  store.dispatch({ type: 'ui.closing' })
+  store.dispatch({ type: 'ui.closing' })
+  assert.equal(updates, 2)
+  store.dispatch({ type: 'assistant.end', stepId: 'step' })
+  assert.equal(store.getState().streams.size, 0)
+  assert.equal(updates, 3)
+  unsubscribe()
+})

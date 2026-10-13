@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { constants } from 'node:fs'
 import { lstat, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -15,12 +16,14 @@ export class Session extends EventEmitter {
     this.tail = Promise.resolve()
   }
 
-  static async open (cwd, id = randomUUID()) {
+  static async open (cwd, id = randomUUID(), { existing = false } = {}) {
     if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) throw new Error('Invalid session ID')
     cwd = await realpath(cwd)
     const directory = path.join(cwd, '.loom', 'sessions', id)
     for (const folder of [path.join(cwd, '.loom'), path.join(cwd, '.loom', 'sessions'), directory]) {
-      try { await mkdir(folder, { mode: 0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
+      if (!existing) {
+        try { await mkdir(folder, { mode: 0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
+      }
       if (!(await lstat(folder)).isDirectory()) throw new Error('Session metadata must use real directories, not symlinks')
     }
     const lock = path.join(directory, 'lock')
@@ -29,8 +32,8 @@ export class Session extends EventEmitter {
     try {
       try {
         if (!(await lstat(path.join(directory, 'events.jsonl'))).isFile()) throw new Error('Session log must be a regular metadata file')
-      } catch (error) { if (error.code !== 'ENOENT') throw error }
-      handle = await open(path.join(directory, 'events.jsonl'), 'a+', 0o600)
+      } catch (error) { if (existing || error.code !== 'ENOENT') throw error }
+      handle = await open(path.join(directory, 'events.jsonl'), constants.O_RDWR | constants.O_APPEND | constants.O_NOFOLLOW | (existing ? 0 : constants.O_CREAT), 0o600)
       const session = new Session(directory, id, handle, lock)
       const raw = await readFile(path.join(directory, 'events.jsonl'), 'utf8')
       const end = raw.lastIndexOf('\n') + 1
@@ -73,6 +76,11 @@ export class Session extends EventEmitter {
 
   get messages () {
     return this.events.flatMap(event => event.message ? [event.message] : [])
+  }
+
+  get unfinished () {
+    const run = this.events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
+    return Boolean(run && (run.type === 'run.started' || ['interrupted', 'failed'].includes(run.status)))
   }
 
   async recover () {

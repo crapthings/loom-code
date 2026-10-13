@@ -43,7 +43,7 @@ loom
 
 `loom` 默认以当前目录作为工作区，无需在每个目标项目安装依赖。上述全局安装链接到本地源码，修改源码后下次启动即可生效；新增依赖后在源码目录运行 `pnpm install --ignore-scripts`。保留源码目录及其依赖，移动目录后重新注册命令。卸载使用 `pnpm remove --global loom-code`。
 
-默认使用 Vercel AI Gateway，模型为 `deepseek/deepseek-v4.1-flash`，认证读取 `AI_GATEWAY_API_KEY`。内置适配器使用 Anthropic Messages 兼容协议并保留模型的上下文、推理和价格信息；无需传 `--base-url`。模型 ID 参考 [Vercel 模型文档](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash)。可在 shell 配置中设置密钥，后续进入任意项目执行 `loom` 即可。上下文、输出限制和费用估算来自锁定版本的 Pi 模型目录，可能与网关最新信息不同，实际计费以网关账单为准。
+默认使用 Vercel AI Gateway，模型为 `deepseek/deepseek-v4.1-flash`，认证读取 `AI_GATEWAY_API_KEY`。内置适配器使用 Anthropic Messages 兼容协议并保留模型的上下文、推理和价格信息；请求使用固定的 Vercel 网关地址。模型 ID 参考 [Vercel 模型文档](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash)。可在 shell 配置中设置密钥，后续进入任意项目执行 `loom` 即可。上下文、输出限制和费用估算来自锁定版本的 Pi 模型目录，可能与网关最新信息不同，实际计费以网关账单为准。
 
 ```sh
 export AI_GATEWAY_API_KEY='YOUR_GATEWAY_KEY'
@@ -53,29 +53,27 @@ loom
 loom --model openai/gpt-5.4
 
 # 查看 Vercel 模型目录
-loom --models --provider vercel
+loom --models
 ```
 
-`--provider` 或 `LOOM_PROVIDER` 可覆盖默认网关（`vercel` 是 `vercel-ai-gateway` 的别名），`--model` 或 `LOOM_MODEL` 可覆盖默认模型。仅设置 `OPENAI_API_KEY` 不会自动切换供应商。缺少 Vercel 密钥时会在启动 TUI 前提示，不会自动调用其他供应商。
+当前只支持 Vercel AI Gateway；`--model` 或 `LOOM_MODEL` 选择网关中的模型，认证只读取 `AI_GATEWAY_API_KEY`。不再提供直连供应商和自定义端点参数。必须选择支持工具调用的模型。缺少 Vercel 密钥时会在启动 TUI 前提示。
 
-其他供应商与自定义端点：先在自己的终端设置对应密钥，再显式启动对应模型。
+
+历史会话入口：
 
 ```sh
-# 从环境变量 ANTHROPIC_API_KEY 读取认证
-node bin/loom.js --provider anthropic --model claude-sonnet-4-6 --cwd /path/to/project
-
-# 从环境变量 OPENAI_API_KEY 读取认证
-node bin/loom.js --provider openai --model gpt-5.4 --cwd /path/to/project
-
-# 查看锁定版本 Pi 提供的模型目录
-node bin/loom.js --models
-node bin/loom.js --models --provider google
-
-# Ollama / LM Studio 等支持工具调用的 OpenAI-compatible 服务
-node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --context-window 32768
+loom resume                  # 当前项目的 TUI 会话选择器
+loom resume --last           # 打开最近的未占用会话
+loom resume SESSION_ID       # 打开指定的已有主会话
+loom resume --list           # 只读列表，无需 API 密钥
+loom resume --list --json    # 输出 JSON
 ```
 
-自定义端点只读取 `LOOM_API_KEY`，不会把其他供应商的密钥自动发送给它；无密钥的本地端点也可使用。必须选择支持工具调用的模型。自定义端点没有价格信息，界面显示的费用不代表实际账单。
+列表展示首个任务、更新时间、状态与待处理条数，排除其他项目和子代理会话。占用中的会话会在文本/JSON 列表中标记，但不能选择。Esc / Ctrl+C 取消选择，不创建新会话。非交互终端中 `loom resume` 输出列表；自动执行需指定 ID 或 `--last`，再传 `--resume` 或 `--print`。
+
+列出时不修复日志、不删除旧锁；真正打开时才获取独占锁和恢复日志。损坏、不可读或超过 16 MiB 的日志跳过并报告数量。当前逐个扫描日志，大规模历史后续需增量索引。打开使用当前模型配置，默认 `ask`，不会恢复本次会话授权。
+
+恢复说明：`loom --session SESSION_ID` 加载旧会话但不自动执行。`/continue` 只恢复中断、失败、待确认的未知结果或持久化待处理输入；新会话和已完成任务仅显示提示，不调用模型。未完成任务优先于排队任务，恢复请求保留已有工具结果并要求避免重复成功操作，但不能保证模型不会再次请求相同操作。
 
 ## 操作
 
@@ -95,9 +93,13 @@ node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --conte
 | `/status` | 显示完整会话 ID、日志路径与待处理输入数 |
 | `/mode` 或 `/permissions` | 打开权限选择菜单；上下键选择、Enter 确认、Esc 取消 |
 | `/mode ask\|edit\|auto\|plan` | 直接切换权限模式，标题栏同步显示 |
+| `/language` 或 `/lang` | 打开界面语言选择菜单 |
+| `/language en` / `/language zh-CN` | 即时切换为英文 / 简体中文 |
 | `/exit` | 取消活动执行、等待工具收尾、关闭日志并恢复终端 |
 
-审批弹窗默认选中 **Deny**；上下键选择，Enter 确认，Esc 拒绝。批准仅适用于本次调用，不会隐式批准未来命令。
+审批弹窗默认选中 **Deny**；上下键选择，Enter 确认，Esc 拒绝。**Allow once** 只批准本次调用；**Allow for this session** 批准当前工具在本次运行内的后续调用，例如 shell 的所有后续命令，仍受沙箱约束。不同工具需分别批准；切换 `/mode`（包括重新选择当前模式）或退出会清除授权，恢复旧会话也不会恢复授权。
+
+界面默认英文；中文审批选项对应「拒绝」「允许一次」「本次会话允许」。语言选择原子保存到 `~/.config/loom/settings.json`，供以后在不同项目启动时使用。切换后标题、底部状态、命令补全和新弹窗立即使用所选语言；命令名称保持稳定。模型回复、代码、已有消息、原始工具输出和诊断错误保留原文，权限与会话授权不变。翻译文案集中在 `src/ui/locales/`，使用命名占位符，缺失翻译回退英文。
 
 ## 执行模式
 
@@ -110,9 +112,11 @@ node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --conte
 
 通常直接运行 `loom`，在 TUI 中输入 `/mode` 选择权限，无需退出或重填启动参数。运行中的任务须先用 `/stop` 停止并等待收尾，再切换模式；切换会同步更新模型提示词、可用工具和执行层，并记入会话日志。当前权限仅对本次进程有效，重新启动默认回到 ask；子代理始终保持只读。`/mode auto` 表示授权智能体自动执行文件操作和主机命令。
 
-Shell 是**主机执行**，目前没有 OS 沙箱；ask/edit 需要审批，auto 不弹审批。文件工具的路径校验不能限制任意 Shell 命令，也不防御恶意本地进程同时改动路径。生产中的不可信任务应在隔离环境运行；执行器接口是下一步接入容器或系统沙箱的位置。
+Shell 默认必须进入 OS 沙箱：macOS 使用 Seatbelt，Linux 使用 bubblewrap。ask/edit 需要审批，auto 不弹审批但保留沙箱边界；默认拒绝 shell 网络访问，限制写入工作区与私有临时目录，并保护凭据和元数据。沙箱无法建立时拒绝执行，不自动退回裸机。调研、策略与限制见 [sandbox.md](docs/sandbox.md)。
 
-Shell 最长运行 120 秒，输出超过 10 MiB 时停止；完整输出保存为 artifact，模型得到有限预览。Unix 中断会终止进程组；Windows 的进程树隔离与取消尚未验证。Shell 子进程默认剔除名称包含 API_KEY、TOKEN、SECRET、PASSWORD 的环境变量，避免继承模型认证；依赖这些变量的命令需要另外设计明确的凭据授权。
+`loom --sandbox-status` 或 TUI 的 `/sandbox` 查看依赖状态。Linux 需要 bubblewrap、socat、ripgrep，以及宿主允许创建非特权 namespace。建议先由用户安装项目依赖，再让智能体离线改代码与跑测试；模型 API 请求不受 shell 网络限制。启动时显式传 `--sandbox off` 才使用裸机执行，`/mode` 和模型无法关闭沙箱。
+
+Shell 最长运行 120 秒，输出超过 10 MiB 时停止；完整输出保存为 artifact，模型得到有限预览。Unix 中断会终止进程组；Windows 沙箱尚未接入。Shell 环境从小型白名单构造，不继承模型认证、SSH agent 或可执行启动钩子，HOME、临时目录及缓存均隔离；用户 HOME 下的部分工具链可能不可访问。
 
 ## 会话与恢复
 
@@ -168,8 +172,8 @@ pnpm run check
 pnpm run check:package
 ```
 
-检查包含 Standard Style、顶层声明的一行解释，以及无网络付费调用的行为测试。真实供应商 HTTP 行为没有用付费密钥验收；供应商适配通过 Pi 的 faux provider 验证，OpenAI-compatible HTTP 接口通过本地测试服务验证。
+检查包含 Standard Style、顶层声明的一行解释，以及无网络付费调用的行为测试。真实供应商 HTTP 行为没有用付费密钥验收；供应商适配通过 Pi 的 faux provider 验证，流式传输与工具调用协议通过注入本地 HTTP 测试服务验证，不代表真实 Vercel 网关验收。
 
-源码借鉴与实现边界见 [architecture.md](docs/architecture.md)。当前重点是可靠的本地编码闭环；MCP 客户端、OAuth 持久认证、可执行插件、分布式协调和 OS 沙箱尚未实现。
+源码借鉴与实现边界见 [architecture.md](docs/architecture.md)。当前重点是可靠的本地编码闭环；MCP 客户端、OAuth 持久认证、可执行插件、分布式协调、容器执行器和沙箱网络放行尚未实现。
 
 贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全边界见 [SECURITY.md](SECURITY.md)，发布步骤见 [releasing.md](docs/releasing.md)。本项目使用 [MIT 许可证](LICENSE)；依赖保留各自许可证，参考 [NOTICE](NOTICE)。

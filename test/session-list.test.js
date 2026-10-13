@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { appendFile, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { listSessions } from '../src/core/session-list.js'
@@ -51,6 +51,16 @@ test('catalog skips malformed and symlinked logs without following metadata dire
   const catalog = await listSessions(cwd)
   assert.equal(catalog.sessions.length, 1)
   assert.equal(catalog.skipped, 2)
+})
+
+test('catalog rejects FIFO metadata without blocking the session picker', async t => {
+  const { cwd, session } = await fixture(t)
+  const directory = path.join(path.dirname(session.directory), 'fifo')
+  await mkdir(directory)
+  execFileSync('/usr/bin/mkfifo', [path.join(directory, 'events.jsonl')])
+  const catalog = await listSessions(cwd)
+  assert.equal(catalog.sessions.length, 1)
+  assert.equal(catalog.skipped, 1)
 })
 
 test('resume CLI lists without credentials or writes and refuses missing or busy selections', async t => {

@@ -8,7 +8,6 @@ Use Node.js >=22.19.0 and the pnpm version pinned in `package.json`.
 
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
-pnpm run demo
 pnpm run check
 pnpm run check:package
 ```

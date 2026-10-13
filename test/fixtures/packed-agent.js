@@ -4,10 +4,11 @@ import { createDemoModel } from './demo-model.js'
 // runPackedAgent verifies packaged SDK exports and a real tool round trip with a test-only model.
 async function runPackedAgent () {
   const api = await import(pathToFileURL(process.argv[2]).href)
-  if (!api.Agent || !api.Session || !api.Dispatcher || !api.createModel || 'createDemoModel' in api) throw new Error('Unexpected packaged SDK exports')
+  if (!api.Agent || !api.Session || !api.Dispatcher || !api.createModel || !api.createDecisionModel || !api.listDecisionModels || 'createDemoModel' in api) throw new Error('Unexpected packaged SDK exports')
   const cwd = process.cwd()
   const session = await api.Session.open(cwd)
-  const agent = new api.Agent({ cwd, session, model: createDemoModel(), mode: 'plan', emit: event => process.stdout.write(`${JSON.stringify(event)}\n`) })
+  const decisionModel = { label: 'offline/decision', classify: async () => ({ stopReason: 'stop', answers: { coverage: { type: 'choice', choice: 'unknown', confidence: 0.2, probabilities: { complete: 0, incomplete: 0, unknown: 1 } }, unsupportedClaims: { type: 'bool', probability: 0.5 }, missingVerification: { type: 'bool', probability: 0.5 } } }) }
+  const agent = new api.Agent({ cwd, session, model: createDemoModel(), decisionModel, mode: 'plan', emit: event => process.stdout.write(`${JSON.stringify(event)}\n`) })
   try {
     await agent.initialize()
     await agent.enqueue('Inspect the workspace')

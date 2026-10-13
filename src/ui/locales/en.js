@@ -1,5 +1,11 @@
 // en contains the default English interface messages, with stable keys and named placeholders.
 export const en = {
+  'verification.label': 'Shadow evaluation',
+  'verification.result': 'Observed coverage: {coverage}. Recorded for evaluation; execution is unchanged.',
+  'verification.unavailable': 'Evaluation unavailable ({status}); execution is unchanged.',
+  'verification.complete': 'supported',
+  'verification.incomplete': 'unmet requirements detected',
+  'verification.unknown': 'insufficient evidence',
   'label.welcome': 'Welcome',
   'label.you': 'You',
   'label.error': 'Error',

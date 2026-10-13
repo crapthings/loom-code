@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { readText } from '../io.js'
 
 // modeInstructions describes each execution mode using the same permissions enforced by the dispatcher.
 const modeInstructions = {
@@ -13,7 +13,7 @@ const modeInstructions = {
 export async function buildInstructions (cwd, mode) {
   let guidance = ''
   try {
-    guidance = (await readFile(path.join(cwd, 'AGENTS.md'), 'utf8')).slice(0, 24000)
+    guidance = (await readText(path.join(cwd, 'AGENTS.md'))).slice(0, 24000)
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
   }
@@ -47,6 +47,7 @@ export function estimateTokens (value) {
 
 // compactContext summarizes older complete exchanges without altering original history or recent tool pairs.
 export async function compactContext ({ session, model, system, tools, budget, signal, emit, force = false }) {
+  signal.throwIfAborted()
   const messages = contextMessages(session)
   const limit = Math.max(4096, Math.floor(model.contextWindow * 0.65))
   if (!force && estimateTokens({ system, messages, tools }) < limit) return false
@@ -68,13 +69,15 @@ export async function compactContext ({ session, model, system, tools, budget, s
   }
   budget.take()
   emit({ type: 'status', text: 'Compacting earlier exchanges' })
+  signal.throwIfAborted()
   const response = await model.complete({
     system: 'Produce an execution handoff with Objective, Latest requirements, Decisions, Completed work and evidence, Files and artifacts, Unknown outcomes, Remaining work, and Next action; preserve user corrections and never invent facts.',
     messages: [{ role: 'user', content: JSON.stringify({ previous: checkpoint?.summary, conversation: older }), timestamp: Date.now() }],
     tools: []
   }, { signal, onDelta: () => {}, onRetry: () => budget.take() })
-  if (response.stopReason !== 'stop') throw new Error('Compaction did not complete; original context preserved')
   budget.account(response.usage)
+  signal.throwIfAborted()
+  if (response.stopReason !== 'stop') throw new Error('Compaction did not complete; original context preserved')
   const summary = response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
   if (!summary.trim()) throw new Error('Empty compaction; original context preserved')
   await session.append('context.compacted', { summary, through: keep.seq - 1, usage: response.usage })

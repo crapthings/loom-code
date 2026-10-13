@@ -7,6 +7,7 @@ import { parseOptions } from '../src/cli.js'
 import { catalogs, translate } from '../src/ui/i18n.js'
 import { LanguagePreferences } from '../src/ui/preferences.js'
 import { selectSession } from '../src/ui/session-picker.js'
+import { writeFile, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { agentFixture, call, deferred, fixture, response } from './helpers.js'
 
@@ -305,6 +306,34 @@ test('language save failures leave the current UI unchanged and catalogs preserv
   }
   assert.match(translate('zh-CN', 'grant.notice', { tool: '$&' }), /\$&/)
   assert.throws(() => translate('de', 'approval.deny'), /Unsupported/)
+})
+
+test('settings reads reject oversized files and final symlinks', async t => {
+  const { cwd } = await fixture(t)
+  const file = path.join(cwd, 'settings.json')
+  await writeFile(file, ' '.repeat(64 * 1024 + 1))
+  const preferences = new LanguagePreferences(file)
+  await assert.rejects(preferences.load(), error => error.cause?.code === 'LOOM_TEXT_LIMIT')
+  const linked = path.join(cwd, 'linked-settings.json')
+  await symlink(file, linked)
+  await assert.rejects(new LanguagePreferences(linked).load(), error => error.cause?.code === 'ELOOP')
+})
+
+test('approval cancelled during overlay creation closes without waiting for keyboard input', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal() })
+  app.bind(agent)
+  t.after(() => app.shutdown())
+  const controller = new AbortController()
+  const showDialog = app.showDialog.bind(app)
+  app.showDialog = (...args) => {
+    const overlay = showDialog(...args)
+    controller.abort()
+    return overlay
+  }
+  assert.equal(await app.approve({ call: call('shell'), effect: 'shell', args: {}, signal: controller.signal }), false)
+  assert.equal(app.tui.hasOverlay(), false)
+  assert.equal(app.store.getState().dialogs.length, 0)
 })
 
 test('slash permission commands update the runtime, prompt, tools, and header together', async t => {

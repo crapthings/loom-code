@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
-import { lstat, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { readHandleText, readText } from '../io.js'
 
 // Session stores ordered facts durably before publishing them to observers.
 export class Session extends EventEmitter {
@@ -33,9 +34,9 @@ export class Session extends EventEmitter {
       try {
         if (!(await lstat(path.join(directory, 'events.jsonl'))).isFile()) throw new Error('Session log must be a regular metadata file')
       } catch (error) { if (existing || error.code !== 'ENOENT') throw error }
-      handle = await open(path.join(directory, 'events.jsonl'), constants.O_RDWR | constants.O_APPEND | constants.O_NOFOLLOW | (existing ? 0 : constants.O_CREAT), 0o600)
+      handle = await open(path.join(directory, 'events.jsonl'), constants.O_RDWR | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK | (existing ? 0 : constants.O_CREAT), 0o600)
       const session = new Session(directory, id, handle, lock)
-      const raw = await readFile(path.join(directory, 'events.jsonl'), 'utf8')
+      const raw = await readHandleText(handle, 16 * 1024 * 1024)
       const end = raw.lastIndexOf('\n') + 1
       if (end < raw.length) await handle.truncate(Buffer.byteLength(raw.slice(0, end)))
       session.events = raw.slice(0, end).split('\n').filter(Boolean).map(JSON.parse)
@@ -55,7 +56,7 @@ export class Session extends EventEmitter {
     const operation = this.tail.then(async () => {
       if (this.failure) throw this.failure
       const event = { ...data, type, id: randomUUID(), seq: this.events.length, at: Date.now() }
-      await this.handle.write(`${JSON.stringify(event)}\n`)
+      await this.handle.writeFile(`${JSON.stringify(event)}\n`)
       await this.handle.sync()
       this.events.push(event)
       this.emit('event', event)
@@ -79,14 +80,14 @@ export class Session extends EventEmitter {
   }
 
   get unfinished () {
-    const run = this.events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
-    return Boolean(run && (run.type === 'run.started' || ['interrupted', 'failed'].includes(run.status)))
+    return unfinishedRun(this.events)
   }
 
   async recover () {
     const started = new Map()
     const runs = new Map()
     const steps = new Map()
+    const decisions = new Map()
     for (const event of this.events) {
       if (event.type === 'tool.started') started.set(event.call.id, event)
       if (event.type === 'tool.finished') started.delete(event.callId)
@@ -94,7 +95,10 @@ export class Session extends EventEmitter {
       if (event.type === 'run.finished') runs.delete(event.runId)
       if (event.type === 'step.started') steps.set(event.stepId, event)
       if (event.type === 'step.finished') steps.delete(event.stepId)
+      if (event.type === 'decision.started') decisions.set(event.decisionId, event)
+      if (event.type === 'decision.finished') decisions.delete(event.decisionId)
     }
+    for (const decisionId of decisions.keys()) await this.append('decision.finished', { decisionId, mode: 'shadow', status: 'unknown', recovery: true })
     for (const stepId of steps.keys()) await this.append('step.finished', { stepId, stopReason: 'aborted', recovery: true })
     for (const runId of runs.keys()) await this.append('run.finished', { runId, status: 'interrupted', recovery: true })
     for (const { call, source } of started.values()) {
@@ -122,15 +126,23 @@ export class Session extends EventEmitter {
   }
 }
 
+// unfinishedRun distinguishes unfinished execution from observation after a durably completed task.
+export function unfinishedRun (events) {
+  const run = events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
+  if (!run || (run.type === 'run.finished' && !['interrupted', 'failed'].includes(run.status))) return false
+  const task = events.findLast(event => ['inbox.delivered', 'step.started', 'task.finished'].includes(event.type))
+  return !(task?.type === 'task.finished' && task.runId === run.runId)
+}
+
 // acquireLock excludes other writers and reclaims only locks whose owning process has exited.
 async function acquireLock (file) {
   try {
     const lock = await open(file, 'wx', 0o600)
-    await lock.writeFile(JSON.stringify({ pid: process.pid }))
-    await lock.close()
+    try { await lock.writeFile(JSON.stringify({ pid: process.pid })) } finally { await lock.close() }
   } catch (error) {
     if (error.code !== 'EEXIST') throw error
-    const { pid } = JSON.parse(await readFile(file, 'utf8'))
+    const { pid } = JSON.parse(await readText(file, 4096))
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error('Invalid session lock owner; refusing to reclaim it')
     try {
       process.kill(pid, 0)
     } catch (error) {

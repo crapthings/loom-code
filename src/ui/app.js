@@ -117,6 +117,7 @@ export class TerminalApp {
   }
 
   add (label, text) {
+    if (this.store.getState().closed) return
     const component = new Text(`${colors.accent(label)}\n${safeText(text)}`, 1, 1)
     this.transcript.addChild(component)
     this.tui.requestRender()
@@ -134,6 +135,11 @@ export class TerminalApp {
     if (event.type === 'mode.changed') { this.updateMode(event.mode); return }
     if (event.type === 'permission.granted') this.add(this.t('label.permissions'), this.t('grant.notice', { tool: event.tool }))
     if (event.type === 'resume.skipped') this.add(this.t('label.session'), this.t('resume.empty'))
+    if (event.type === 'verification.finished') {
+      const text = event.status === 'completed' ? this.t('verification.result', { coverage: this.t(`verification.${event.answers.coverage.choice}`) }) : this.t('verification.unavailable', { status: event.status })
+      this.add(this.t('verification.label'), text)
+      this.refreshStatus(this.agent.status, event.budget)
+    }
     if (event.type === 'queued') this.queuedComponents.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
     if (event.type === 'user') {
       const component = this.queuedComponents.get(event.inputId)
@@ -227,7 +233,10 @@ export class TerminalApp {
       const title = colors.warning(this.t(effect === 'shell' ? 'approval.shell' : 'approval.write', { boundary: this.executionLabel() }))
       const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
       const overlay = this.showDialog('approval', dialog, { callId: call.id, effect })
+      let settled = false
       const finish = allowed => {
+        if (settled) return
+        settled = true
         signal.removeEventListener('abort', abort)
         overlay.hide()
         this.tui.requestRender()
@@ -237,6 +246,7 @@ export class TerminalApp {
       choices.onSelect = item => finish(item.value === 'session' ? 'session' : item.value === 'allow')
       choices.onCancel = () => finish(false)
       signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
       this.tui.requestRender()
     })
   }

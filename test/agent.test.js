@@ -6,6 +6,7 @@ import path from 'node:path'
 import { Agent } from '../src/core/agent.js'
 import { Session } from '../src/core/session.js'
 import { Budget } from '../src/core/budget.js'
+import { discoverSkills, skillTool } from '../src/core/skills.js'
 import { compactContext, contextMessages } from '../src/core/context.js'
 import { agentFixture, call, deferred, fakeModel, fixture, response } from './helpers.js'
 
@@ -250,8 +251,61 @@ test('failed compaction never replaces the original context', async t => {
   const { session } = await fixture(t)
   for (const content of ['old', 'new']) await session.append('message', { message: { role: 'user', content, timestamp: 1 } })
   const model = fakeModel([response('incomplete', 'length')])
-  await assert.rejects(compactContext({ session, model, system: '', tools: [], budget: new Budget(), signal: new AbortController().signal, emit: () => {}, force: true }), /did not complete/)
+  const budget = new Budget()
+  await assert.rejects(compactContext({ session, model, system: '', tools: [], budget, signal: new AbortController().signal, emit: () => {}, force: true }), /did not complete/)
+  assert.equal(budget.calls, 1)
+  assert.equal(budget.tokens, 10)
   assert.equal(contextMessages(session).length, 2)
+})
+
+test('manual synchronous failures settle ownership and allow subsequent work', async t => {
+  const { agent, model, events } = await agentFixture(t, [response('Recovered')])
+  const failure = 'Synchronous operation failed'
+  await assert.rejects(agent.manual('testing', () => { throw failure }), error => error === failure)
+  await agent.wait()
+  assert.equal(agent.status, 'failed')
+  assert.equal(agent.controller, null)
+  assert.equal(agent.running, null)
+  assert.ok(events.some(event => event.type === 'error' && event.text === failure))
+  await agent.enqueue('New task')
+  await agent.wait()
+  assert.equal(agent.status, 'idle')
+  assert.equal(model.requests.length, 1)
+})
+
+test('immediate close cancels an admitted manual action before its effects start', async t => {
+  const { agent } = await agentFixture(t, [])
+  let executed = false
+  const operation = agent.manual('testing', () => { executed = true })
+  const rejected = assert.rejects(operation, /Interrupted/)
+  await agent.close()
+  await rejected
+  assert.equal(executed, false)
+  assert.equal(agent.status, 'interrupted')
+  assert.equal(agent.controller, null)
+  assert.equal(agent.running, null)
+})
+
+test('cancelled compaction discards a late successful response but accounts for its usage', async t => {
+  const entered = deferred()
+  const release = deferred()
+  const { agent, session } = await agentFixture(t, [async () => {
+    entered.resolve()
+    await release.promise
+    return response('Late summary')
+  }])
+  for (const content of ['older', 'recent']) await session.append('message', { message: { role: 'user', content, timestamp: 1 } })
+  const before = contextMessages(session)
+  const operation = agent.compact()
+  await entered.promise
+  agent.interrupt()
+  release.resolve()
+  await assert.rejects(operation, /Interrupted/)
+  await agent.wait()
+  assert.equal(agent.status, 'interrupted')
+  assert.equal(agent.budget.tokens, 10)
+  assert.deepEqual(contextMessages(session), before)
+  assert.equal(session.events.some(event => event.type === 'context.compacted'), false)
 })
 
 test('truncated provider output fails calls even when their arguments parse', async t => {
@@ -292,6 +346,18 @@ test('skills load descriptions first and full instructions only through an autho
   await agent.enqueue('Review')
   await agent.wait()
   assert.match(model.requests[1].messages.at(-1).content[0].text, /Detailed private/)
+})
+
+test('skill discovery skips oversized instructions and loading enforces the same byte limit', async t => {
+  const { cwd } = await fixture(t)
+  const root = path.join(cwd, '.agents', 'skills')
+  for (const name of ['valid', 'oversized']) await mkdir(path.join(root, name), { recursive: true })
+  await writeFile(path.join(root, 'valid', 'SKILL.md'), '---\ndescription: Valid workflow\n---\nInstructions')
+  await writeFile(path.join(root, 'oversized', 'SKILL.md'), 'x'.repeat(32001))
+  const skills = await discoverSkills(cwd)
+  assert.deepEqual(skills.map(skill => skill.name), ['valid'])
+  await writeFile(skills[0].file, '你'.repeat(11000))
+  await assert.rejects(skillTool(skills).execute({ name: 'valid' }), { code: 'LOOM_TEXT_LIMIT' })
 })
 
 test('manual compaction participates in cancellation and session ownership', async t => {

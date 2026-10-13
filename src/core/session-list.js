@@ -1,21 +1,22 @@
-import { constants } from 'node:fs'
-import { lstat, open, readdir, realpath } from 'node:fs/promises'
+import { lstat, readdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
+import { readText } from '../io.js'
+import { unfinishedRun } from './session.js'
 
-// readMetadata reads bounded regular files without following a final symlink or modifying session storage.
-async function readMetadata (file, limit = 16 * 1024 * 1024) {
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try {
-    const info = await handle.stat()
-    if (!info.isFile() || info.size > limit) throw new Error('Session metadata is not a bounded regular file')
-    return await handle.readFile('utf8')
-  } finally { await handle.close() }
+// sessionStatus reports unresolved effects first and distinguishes completed tasks from unfinished runs.
+function sessionStatus (events, calls) {
+  const recovery = events.findLast(event => event.type === 'recovery.required' || event.type === 'recovery.acknowledged')
+  if (calls.size || recovery?.type === 'recovery.required') return 'recovery required'
+  const run = events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
+  if (!run || (run.type === 'run.finished' && !['completed', 'interrupted', 'failed'].includes(run.status))) return 'empty'
+  if (!unfinishedRun(events)) return 'completed'
+  return run.type === 'run.started' ? 'interrupted' : run.status
 }
 
 // lockedSession checks whether a lock owner is alive and treats unverifiable locks as busy.
 async function lockedSession (directory) {
   try {
-    const { pid } = JSON.parse(await readMetadata(path.join(directory, 'lock'), 4096))
+    const { pid } = JSON.parse(await readText(path.join(directory, 'lock'), 4096))
     if (!Number.isInteger(pid) || pid <= 0) return true
     try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' }
   } catch (error) { return error.code !== 'ENOENT' }
@@ -37,7 +38,7 @@ export async function listSessions (cwd) {
     if (!entry.isDirectory() || !/^[a-zA-Z0-9-]{1,80}$/.test(entry.name)) continue
     try {
       const directory = path.join(root, entry.name)
-      const raw = await readMetadata(path.join(directory, 'events.jsonl'))
+      const raw = await readText(path.join(directory, 'events.jsonl'), 16 * 1024 * 1024)
       const events = raw.slice(0, raw.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map(JSON.parse)
       const meta = events.find(event => event.type === 'session.created')
       if (!meta || meta.cwd !== cwd) { skipped++; continue }
@@ -53,9 +54,7 @@ export async function listSessions (cwd) {
         if (event.type === 'tool.started') calls.add(event.call?.id)
         if (event.type === 'tool.finished') calls.delete(event.callId)
       }
-      const run = events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
-      const recovery = events.findLast(event => event.type === 'recovery.required' || event.type === 'recovery.acknowledged')
-      const status = calls.size || recovery?.type === 'recovery.required' ? 'recovery required' : run?.type === 'run.started' ? 'interrupted' : ['completed', 'interrupted', 'failed'].includes(run?.status) ? run.status : 'empty'
+      const status = sessionStatus(events, calls)
       const updated = events.at(-1)?.at || meta.at
       if (!Number.isFinite(updated)) throw new Error('Invalid session timestamp')
       const first = events.find(event => event.type === 'inbox.enqueued')

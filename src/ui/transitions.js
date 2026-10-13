@@ -76,6 +76,13 @@ function finishAssistant (state, event) {
   return { ...state, streams, budget: budgetSnapshot(event.budget, state.budget) }
 }
 
+// failAssistant drops transient streams after an operation fails while preserving its visible transcript.
+function failAssistant (state, event) {
+  const budget = budgetSnapshot(event.budget, state.budget)
+  if (!state.streams.size && budget === state.budget) return state
+  return { ...state, streams: new Map(), budget }
+}
+
 // transitions maps mutually exclusive event names to pure display-state transformations.
 export const transitions = Object.freeze({
   'ui.language': changeLanguage,
@@ -91,5 +98,6 @@ export const transitions = Object.freeze({
   user: deliverInput,
   'assistant.start': startAssistant,
   'assistant.delta': appendAssistant,
-  'assistant.end': finishAssistant
+  'assistant.end': finishAssistant,
+  error: failAssistant
 })

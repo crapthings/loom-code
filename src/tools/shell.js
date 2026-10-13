@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
-import { open, readFile } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { ShellExecutor } from '../execution/executor.js'
+import { readText } from '../io.js'
 
 // shellTool executes an authorized isolated command with bounded output and process-tree cancellation.
 export function shellTool (cwd, session, executor = new ShellExecutor({ cwd })) {
@@ -42,7 +43,7 @@ export function shellTool (cwd, session, executor = new ShellExecutor({ cwd })) 
         const capture = chunk => {
           bytes += chunk.length
           if (bytes > 10 * 1024 * 1024) { terminate('output limit'); return }
-          writing = writing.then(() => output.write(chunk)).catch(error => { writeError = error; terminate('output write failed') })
+          writing = writing.then(() => output.writeFile(chunk)).catch(error => { writeError = error; terminate('output write failed') })
         }
         child.stdout.on('data', capture)
         child.stderr.on('data', capture)
@@ -54,7 +55,7 @@ export function shellTool (cwd, session, executor = new ShellExecutor({ cwd })) 
         await writing
         if (writeError) throw writeError
         await output.sync()
-        const text = await readFile(path.join(session.directory, artifact), 'utf8')
+        const text = await readText(path.join(session.directory, artifact), 10 * 1024 * 1024)
         const preview = text.length > 12000 ? `${text.slice(0, 6000)}\n[... truncated ...]\n${text.slice(-6000)}` : text
         return { text: `exit: ${code}; status: ${stopped || 'completed'}; artifact: ${artifact}\n${preview}`, isError: Boolean(stopped) || code !== 0 }
       } finally {

@@ -1,5 +1,6 @@
-import { readFile, unlink } from 'node:fs/promises'
+import { unlink } from 'node:fs/promises'
 import path from 'node:path'
+import { readText } from '../io.js'
 import { Type } from '@earendil-works/pi-ai'
 import { hashText, resolveFile, saveFile } from './files.js'
 
@@ -21,9 +22,9 @@ export function checkpointTool (cwd, session) {
       const event = session.events.find(event => event.type === 'file.checkpoint' && event.checkpoint === id)
       if (!event) throw new Error('Unknown checkpoint')
       if (session.events.some(event => event.type === 'file.restored' && event.checkpoint === id)) throw new Error('Checkpoint has already been restored')
-      const snapshot = JSON.parse(await readFile(path.join(session.directory, 'checkpoints', `${id}.json`), 'utf8'))
+      const snapshot = JSON.parse(await readText(path.join(session.directory, 'checkpoints', `${id}.json`), 16 * 1024 * 1024))
       const file = await resolveFile(cwd, event.path, true)
-      const current = await readFile(file, 'utf8')
+      const current = await readText(file)
       if (hashText(current) !== snapshot.nextHash) throw new Error('File changed since this edit; refusing to overwrite subsequent work')
       signal.throwIfAborted()
       if (snapshot.previous === null) await unlink(file)

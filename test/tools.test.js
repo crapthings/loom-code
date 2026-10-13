@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, symlink, writeFile } from 'node:fs/promises'
+import { readFile, readdir, symlink, writeFile } from 'node:fs/promises'
+import { readdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { createTools, Dispatcher } from '../src/tools/dispatcher.js'
-import { hashText, resolveFile } from '../src/tools/files.js'
+import { hashText, resolveFile, saveFile } from '../src/tools/files.js'
+import { readText } from '../src/io.js'
 import { latestCheckpoint } from '../src/tools/checkpoints.js'
 import { call, deferred, fixture } from './helpers.js'
 
@@ -30,6 +33,83 @@ test('version-checked edits preserve literal replacement text and a before-edit 
   const stale = await dispatcher.run(call('write_file', { path: 'a.js', content: 'bad', expectedHash: hashText(original) }, 'stale'), new AbortController().signal)
   assert.equal(stale.isError, true)
   assert.match(stale.content[0].text, /changed/)
+})
+
+test('conflicting and cancelled replacements preserve the current file and clean owned temporary files', async t => {
+  const { cwd, session } = await fixture(t)
+  const file = path.join(cwd, 'a.txt')
+  await writeFile(file, 'original')
+  const append = session.append.bind(session)
+  session.append = async (type, data) => {
+    const event = await append(type, data)
+    if (type === 'file.checkpoint') await writeFile(file, 'external edit')
+    return event
+  }
+  await assert.rejects(saveFile(session, file, 'a.txt', 'original', 'replacement', new AbortController().signal), /changed during edit/)
+  assert.equal(await readFile(file, 'utf8'), 'external edit')
+  assert.ok(!(await readdir(cwd)).some(name => name.includes('.loom-')))
+  session.append = append
+  const controller = new AbortController()
+  const signal = {
+    throwIfAborted: () => {
+      if (readdirSync(cwd).some(name => name.includes('.loom-'))) controller.abort()
+      controller.signal.throwIfAborted()
+    }
+  }
+  await assert.rejects(saveFile(session, file, 'a.txt', 'external edit', 'replacement', signal), { name: 'AbortError' })
+  assert.equal(await readFile(file, 'utf8'), 'external edit')
+  assert.ok(!(await readdir(cwd)).some(name => name.includes('.loom-')))
+  assert.equal(session.events.filter(event => event.type === 'file.checkpoint').length, 2)
+})
+
+test('bounded text reads refuse special files, symlinks, binary content, and oversize input', async t => {
+  const { cwd } = await fixture(t)
+  const file = path.join(cwd, 'text.txt')
+  await writeFile(file, '你好')
+  assert.equal(await readText(file, 6), '你好')
+  await assert.rejects(readText(file, 5), { code: 'LOOM_TEXT_LIMIT' })
+  await assert.rejects(readText(cwd), /regular file/)
+  await symlink(file, path.join(cwd, 'linked'))
+  await assert.rejects(readText(path.join(cwd, 'linked')))
+  await writeFile(file, 'a\0b')
+  await assert.rejects(readText(file), { code: 'LOOM_BINARY_FILE' })
+  if (process.platform !== 'win32') {
+    const fifo = path.join(cwd, 'fifo')
+    execFileSync('/usr/bin/mkfifo', [fifo])
+    await assert.rejects(readText(fifo), /regular file/)
+  }
+})
+
+test('one large directory cannot exceed the file listing cap and reports incomplete coverage', async t => {
+  const { cwd, session } = await fixture(t)
+  for (let offset = 0; offset < 5010; offset += 100) {
+    await Promise.all(Array.from({ length: Math.min(100, 5010 - offset) }, (_, i) => writeFile(path.join(cwd, `file-${offset + i}`), '')))
+  }
+  const tool = createTools({ cwd, session }).find(tool => tool.name === 'list_files')
+  const output = await tool.execute({}, { signal: new AbortController().signal })
+  const lines = output.split('\n')
+  assert.equal(lines.filter(line => line.startsWith('file-')).length, 5000)
+  assert.match(lines.at(-1), /File limit reached/)
+})
+
+test('invalid tool contracts and unknown effects become paired errors without bypassing authorization', async t => {
+  const { session } = await fixture(t)
+  let executions = 0
+  const tools = [
+    { name: 'unknown', effect: 'network', parameters: Type.Object({}), execute: async () => { executions++; return 'unsafe' } },
+    { name: 'invalid', effect: 'read', parameters: Type.Object({}), execute: async () => ({ text: 123 }) },
+    { name: 'throws', effect: 'read', parameters: Type.Object({}), execute: async () => { const failure = 'plain failure'; throw failure } }
+  ]
+  const dispatcher = new Dispatcher({ session, tools, mode: 'auto' })
+  const signal = new AbortController().signal
+  for (const name of ['unknown', 'invalid', 'throws']) {
+    const result = await dispatcher.run(call(name, {}, name), signal)
+    assert.equal(result.isError, true)
+    assert.equal(typeof result.content[0].text, 'string')
+  }
+  assert.equal(executions, 0)
+  assert.equal(session.events.filter(event => event.type === 'tool.finished').length, 3)
+  assert.equal(session.events.find(event => event.callId === 'unknown').executed, false)
 })
 
 test('plan mode denies mutations even if the provider calls an invisible tool', async t => {

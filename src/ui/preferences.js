@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { validateLanguage } from './i18n.js'
+import { readText } from '../io.js'
 
 // LanguagePreferences reads and atomically saves user-level UI language without storing permissions or credentials.
 export class LanguagePreferences {
@@ -10,7 +11,7 @@ export class LanguagePreferences {
 
   async read () {
     try {
-      const settings = JSON.parse(await readFile(this.file, 'utf8'))
+      const settings = JSON.parse(await readText(this.file, 64 * 1024))
       if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Settings must be a JSON object')
       return settings
     } catch (error) {

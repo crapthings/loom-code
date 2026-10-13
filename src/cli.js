@@ -11,6 +11,7 @@ import { safeText } from './ui/theme.js'
 import { validateMode } from './core/modes.js'
 import { sandboxStatus } from './execution/executor.js'
 import { LanguagePreferences } from './ui/preferences.js'
+import { createDecisionModel, defaultDecisionModel, listDecisionModels } from './model/decision.js'
 
 // parseOptions validates command-line configuration before opening a session or entering raw mode.
 export function parseOptions (args, env = process.env) {
@@ -29,6 +30,9 @@ export function parseOptions (args, env = process.env) {
       print: { type: 'string' },
       json: { type: 'boolean', default: false },
       models: { type: 'boolean', default: false },
+      verify: { type: 'string', default: 'off' },
+      'decision-model': { type: 'string' },
+      'decision-models': { type: 'boolean', default: false },
       resume: { type: 'boolean', default: false },
       last: { type: 'boolean', default: false },
       list: { type: 'boolean', default: false },
@@ -44,13 +48,15 @@ export function parseOptions (args, env = process.env) {
   if (values.list && (values.session || values.resume || values.print !== undefined)) throw new Error('--list cannot be combined with execution or session selection')
   if (values.resume && !resumeCommand && !values.session) throw new Error('--resume requires --session ID; use loom resume to choose a session')
   validateMode(values.mode)
+  if (!['off', 'shadow'].includes(values.verify)) throw new Error('--verify must be off or shadow')
   if (!['required', 'off'].includes(values.sandbox)) throw new Error('--sandbox must be required or off')
   const steps = Number(values.steps)
   if (!Number.isInteger(steps) || steps < 1 || steps > 500) throw new Error('--steps must be an integer from 1 to 500')
   if (!['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(values.reasoning)) throw new Error('Invalid --reasoning level')
   if (env.LOOM_PROVIDER && !['vercel', defaultProvider].includes(env.LOOM_PROVIDER)) throw new Error('Only Vercel AI Gateway is supported; remove LOOM_PROVIDER')
   const model = values.model || env.LOOM_MODEL || defaultModel
-  return { ...values, provider: defaultProvider, model, steps, resumeCommand }
+  const decisionModel = values['decision-model'] || env.LOOM_DECISION_MODEL || defaultDecisionModel
+  return { ...values, provider: defaultProvider, model, decisionModel, steps, resumeCommand }
 }
 
 // helpText documents both interactive usage and deterministic headless execution.
@@ -62,6 +68,9 @@ Usage: loom [options]
   --cwd DIRECTORY          Workspace (default: current directory)
   --model ID               Model identifier (or LOOM_MODEL)
   --models                 List Vercel AI Gateway chat models
+  --verify off|shadow      Optional completion evaluation (default: off; shadow records only)
+  --decision-model ID      Classifier identifier (or LOOM_DECISION_MODEL)
+  --decision-models        List decision models without API calls
   --mode ask|edit|auto|plan Initial permissions; switch with /mode in the TUI
   --sandbox required|off   Mandatory OS sandbox (default) or explicit host execution
   --sandbox-status         Check sandbox platform and dependencies without API calls
@@ -90,6 +99,7 @@ export async function main (args = process.argv.slice(2)) {
   if (options.help) { process.stdout.write(helpText); return }
   if (options['sandbox-status']) { const status = await sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
   if (options.models) { process.stdout.write(`${listModels().join('\n')}\n`); return }
+  if (options['decision-models']) { process.stdout.write(`${listDecisionModels().join('\n')}\n`); return }
   if (!options.resumeCommand && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
   const cwd = await realpath(options.cwd)
   const preferences = new LanguagePreferences()
@@ -121,6 +131,7 @@ export async function main (args = process.argv.slice(2)) {
   if (options.json && !headless) throw new Error('--json requires --print or headless --resume')
   if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error('Interactive mode needs a terminal; use --print TASK')
   const model = createModel(options)
+  const decisionModel = options.verify === 'shadow' ? createDecisionModel({ model: options.decisionModel }) : undefined
   const language = headless ? 'en' : await preferences.load()
   const session = await Session.open(cwd, options.session, { existing: options.resumeCommand })
   let agent
@@ -135,7 +146,7 @@ export async function main (args = process.argv.slice(2)) {
       else if (event.type === 'error') process.stderr.write(`${safeText(event.text)}\n`)
       else if (event.type === 'resume.skipped') process.stdout.write(`${event.text}\n`)
     }
-    agent = new Agent({ cwd, session, model, mode: options.mode, sandbox: options.sandbox, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
+    agent = new Agent({ cwd, session, model, decisionModel, mode: options.mode, sandbox: options.sandbox, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
     app?.bind(agent)
     await agent.initialize()
     process.on('SIGINT', shutdown)

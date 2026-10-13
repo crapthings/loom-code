@@ -6,6 +6,9 @@ export class Budget {
     this.calls = 0
     this.tokens = 0
     this.cost = 0
+    this.decisionCalls = 0
+    this.decisionTokens = 0
+    this.decisionCost = 0
   }
 
   take () {
@@ -18,5 +21,17 @@ export class Budget {
   account (usage) {
     this.tokens += usage?.totalTokens || 0
     this.cost += usage?.cost?.total || 0
+  }
+
+  takeDecision () {
+    if (this.decisionCalls >= 3 || Date.now() >= this.deadline) return false
+    this.decisionCalls++
+    return true
+  }
+
+  accountDecision (usage) {
+    this.account(usage)
+    this.decisionTokens += usage?.totalTokens || 0
+    this.decisionCost += usage?.cost?.total || 0
   }
 }

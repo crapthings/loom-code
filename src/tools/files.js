@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, open, readFile, readdir, realpath, rename, stat } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { readText, writeSynced } from '../io.js'
 import { Type } from '@earendil-works/pi-ai'
 import { protectedNames, isCredentialPath, runtimeRoot } from '../execution/policy.js'
 
@@ -33,14 +34,6 @@ export async function resolveFile (cwd, input, create = false) {
   return canonical
 }
 
-// readText refuses binary and oversized files before loading their contents into memory.
-async function readText (file) {
-  if ((await stat(file)).size > 2 * 1024 * 1024) throw new Error('File exceeds the 2 MiB text limit')
-  const text = await readFile(file, 'utf8')
-  if (text.includes('\0')) throw new Error('Binary files are not supported by text tools')
-  return text
-}
-
 // fileTools provides version-checked file inspection and reversible workspace edits.
 export function fileTools (cwd, session) {
   return [
@@ -62,7 +55,10 @@ export function fileTools (cwd, session) {
       effect: 'read',
       parallel: true,
       parameters: Type.Object({ path: Type.Optional(Type.String()) }),
-      execute: async ({ path: input = '.' }, { signal }) => (await walkFiles(cwd, input, signal)).join('\n')
+      execute: async ({ path: input = '.' }, { signal }) => {
+        const files = await walkFiles(cwd, input, signal)
+        return files.join('\n') + (files.length === 5000 ? '\n[File limit reached; narrow the path]' : '')
+      }
     },
     {
       name: 'search',
@@ -72,18 +68,23 @@ export function fileTools (cwd, session) {
       parameters: Type.Object({ query: Type.String({ minLength: 1 }), path: Type.Optional(Type.String()) }),
       execute: async ({ query, path: input = '.' }, { signal }) => {
         const results = []
-        for (const entry of await walkFiles(cwd, input, signal)) {
+        const files = await walkFiles(cwd, input, signal)
+        for (const entry of files) {
           signal.throwIfAborted()
           const file = await resolveFile(cwd, entry)
           if ((await stat(file)).size > 256 * 1024) continue
-          const text = await readFile(file, 'utf8')
-          if (text.includes('\0')) continue
+          let text
+          try { text = await readText(file, 256 * 1024) } catch (error) {
+            if (['LOOM_BINARY_FILE', 'LOOM_TEXT_LIMIT'].includes(error.code)) continue
+            throw error
+          }
           for (const [index, line] of text.split('\n').entries()) {
             if (line.includes(query)) results.push(`${entry}:${index + 1}: ${line.slice(0, 500)}`)
             if (results.length >= 200) return `${results.join('\n')}\n[Match limit reached; narrow the search]`
           }
         }
-        return results.join('\n') || 'No matches'
+        const summary = results.join('\n') || 'No matches'
+        return summary + (files.length === 5000 ? '\n[File limit reached; only scanned files were searched; narrow the path]' : '')
       }
     },
     {
@@ -133,6 +134,7 @@ async function walkFiles (cwd, input, signal) {
       const file = path.join(entry.parentPath, entry.name)
       if (entry.isDirectory()) pending.push(file)
       if (entry.isFile()) files.push(path.relative(cwd, file))
+      if (files.length === 5000) break
     }
   }
   return files.sort()
@@ -145,22 +147,25 @@ export async function saveFile (session, file, input, previous, content, signal,
   const checkpoint = randomUUID()
   const directory = path.join(session.directory, 'checkpoints')
   await mkdir(directory, { recursive: true })
-  const snapshot = await open(path.join(directory, `${checkpoint}.json`), 'wx', 0o600)
-  await snapshot.writeFile(JSON.stringify({ path: input, previous, nextHash: hashText(content) }))
-  await snapshot.sync()
-  await snapshot.close()
-  await session.append('file.checkpoint', { path: input, checkpoint, nextHash: hashText(content), restoration })
+  const nextHash = hashText(content)
+  await writeSynced(path.join(directory, `${checkpoint}.json`), JSON.stringify({ path: input, previous, nextHash }), 0o600)
+  await session.append('file.checkpoint', { path: input, checkpoint, nextHash, restoration })
   signal.throwIfAborted()
   if (previous === null) {
-    const handle = await open(file, 'wx', 0o644)
-    try { await handle.writeFile(content); await handle.sync() } finally { await handle.close() }
+    await writeSynced(file, content, 0o644)
   } else {
     const mode = (await stat(file)).mode
     const temporary = `${file}.loom-${checkpoint}`
-    const handle = await open(temporary, 'wx', mode)
-    try { await handle.writeFile(content); await handle.sync() } finally { await handle.close() }
-    if (hashText(await readText(file)) !== hashText(previous)) throw new Error('File changed during edit; checkpoint preserved')
-    await rename(temporary, file)
+    let created = false
+    try {
+      // Own the temporary file before writing so cleanup never removes a pre-existing path.
+      const handle = await open(temporary, 'wx', mode)
+      created = true
+      try { await handle.writeFile(content); await handle.sync() } finally { await handle.close() }
+      if (hashText(await readText(file)) !== hashText(previous)) throw new Error('File changed during edit; checkpoint preserved')
+      signal.throwIfAborted()
+      await rename(temporary, file)
+    } finally { if (created) await rm(temporary, { force: true }) }
   }
-  return `Saved ${input}; sha256: ${hashText(content)}; checkpoint: ${checkpoint}`
+  return `Saved ${input}; sha256: ${nextHash}; checkpoint: ${checkpoint}`
 }

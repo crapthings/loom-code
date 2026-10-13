@@ -1,5 +1,11 @@
 // zhCN contains Simplified Chinese interface messages matching the English catalog keys.
 export const zhCN = {
+  'verification.label': '旁路质量评估',
+  'verification.result': '观察到的要求覆盖情况：{coverage}。已记录供评估，执行行为保持不变。',
+  'verification.unavailable': '评估未完成（{status}），执行行为保持不变。',
+  'verification.complete': '证据支持',
+  'verification.incomplete': '发现未满足的要求',
+  'verification.unknown': '证据不足',
   'label.welcome': '欢迎',
   'label.you': '你',
   'label.error': '错误',

@@ -107,6 +107,34 @@ test('shell environment omits credentials and executable startup hooks by constr
   assert.equal(env.HOME, '/temporary/example')
 })
 
+test('repeated sandbox cleanup cannot reset a subsequent active launch', async t => {
+  const { cwd } = await fixture(t)
+  let resets = 0
+  let cleanups = 0
+  const manager = {
+    updateConfig: () => {},
+    checkDependencies: () => ({ errors: [], warnings: [] }),
+    initialize: async () => {},
+    wrapWithSandboxArgv: async () => ({ argv: ['/bin/bash', '-c', 'true'] }),
+    getLinuxGlobPatternWarnings: () => [],
+    cleanupAfterCommand: () => { cleanups++ },
+    reset: async () => { resets++ }
+  }
+  const executor = new ShellExecutor({ cwd, manager })
+  const first = await executor.prepare('true', new AbortController().signal)
+  await Promise.all([first.cleanup(), first.cleanup()])
+  assert.equal(resets, 1)
+  assert.equal(cleanups, 1)
+  const second = await executor.prepare('true', new AbortController().signal)
+  try {
+    await first.cleanup()
+    assert.equal(resets, 1)
+    assert.equal(cleanups, 1)
+  } finally { await second.cleanup() }
+  assert.equal(resets, 2)
+  assert.equal(cleanups, 2)
+})
+
 test('Linux sandbox preparation never executes helpers from a project-controlled PATH', { skip: process.platform !== 'linux' }, async t => {
   const { cwd, session } = await fixture(t)
   const marker = path.join(cwd, 'helper-executed')

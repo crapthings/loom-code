@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createModels, createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import { createModel, listModels } from '../src/model/provider.js'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
+import { vercelAIGatewayProvider } from '@earendil-works/pi-ai/providers/vercel-ai-gateway'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -31,6 +32,46 @@ test('only Vercel routing is admitted while model selection remains configurable
   const models = listModels()
   assert.ok(models.length > 0)
   assert.ok(models.every(model => model.startsWith('vercel-ai-gateway/')))
+})
+
+test('GPT-6.1 Sol selects gateway metadata and preserves reasoning, streams, and tool calls offline', async () => {
+  const id = 'openai/gpt-6.1-sol'
+  const options = parseOptions(['--model', id, '--reasoning', 'high'], { LOOM_MODEL: 'other' })
+  assert.equal(parseOptions([], { LOOM_MODEL: id }).model, id)
+  assert.ok(listModels().includes(`vercel-ai-gateway/${id}`))
+  const catalog = createModels()
+  catalog.setProvider(vercelAIGatewayProvider())
+  const selected = catalog.getModel(options.provider, options.model)
+  assert.equal(selected.api, 'anthropic-messages')
+  assert.equal(selected.baseUrl, 'https://ai-gateway.vercel.sh')
+  assert.equal(selected.reasoning, true)
+  assert.equal(selected.maxTokens, 128000)
+  const response = fauxAssistantMessage([fauxText('Inspecting'), fauxToolCall('list_files', {})], { stopReason: 'toolUse' })
+  const input = { system: 'Inspect the workspace', messages: [{ role: 'user', content: 'Inspect', timestamp: 1 }], tools: [] }
+  const signal = new AbortController().signal
+  const collection = {
+    getModel: (...args) => catalog.getModel(...args),
+    streamSimple: (model, context, request) => {
+      assert.equal(model, selected)
+      assert.equal(context.systemPrompt, input.system)
+      assert.equal(context.messages, input.messages)
+      assert.equal(context.tools, input.tools)
+      assert.equal(request.reasoning, 'high')
+      assert.equal(request.signal, signal)
+      return {
+        async * [Symbol.asyncIterator] () { yield { type: 'text_delta', delta: 'Inspecting' } },
+        result: async () => response
+      }
+    }
+  }
+  const model = createModel({ ...options, collection })
+  assert.equal(model.label, `vercel-ai-gateway/${id}`)
+  assert.equal(model.contextWindow, 1050000)
+  let text = ''
+  const result = await model.complete(input, { signal, onDelta: delta => { text += delta } })
+  assert.equal(text, 'Inspecting')
+  assert.equal(result.stopReason, 'toolUse')
+  assert.equal(result.content.find(part => part.type === 'toolCall').name, 'list_files')
 })
 
 test('missing Vercel credentials fail before opening a workspace or entering the TUI', async t => {

@@ -1,19 +1,11 @@
-import { createModels } from '@earendil-works/pi-ai'
-import { vercelAIGatewayProvider } from '@earendil-works/pi-ai/providers/vercel-ai-gateway'
+import { defaultProvider, gatewayModels } from './catalog.js'
 import { setTimeout as delay } from 'node:timers/promises'
 
 // defaultProvider identifies the only supported production gateway.
-export const defaultProvider = 'vercel-ai-gateway'
+export { defaultProvider }
 
 // defaultModel selects the initial model served through Vercel AI Gateway.
 export const defaultModel = 'deepseek/deepseek-v4.1-flash'
-
-// gatewayModels registers only the Vercel provider and its bundled catalog.
-function gatewayModels () {
-  const models = createModels()
-  models.setProvider(vercelAIGatewayProvider())
-  return models
-}
 
 // createModel wraps Vercel's Pi streams in the harness's small completion interface.
 export function createModel ({ provider = defaultProvider, model: id = defaultModel, reasoning = 'off', collection } = {}) {

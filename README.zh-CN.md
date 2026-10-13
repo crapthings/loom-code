@@ -16,10 +16,11 @@
 git clone https://github.com/crapthings/loom-code.git
 cd loom-code
 pnpm install --frozen-lockfile --ignore-scripts
-pnpm run demo
+export AI_GATEWAY_API_KEY='YOUR_VERCEL_GATEWAY_KEY'
+pnpm start
 ```
 
-离线演示会真正读取当前工作区，展示工具往返、流式输出与持久化会话，不需要密钥、不调用付费模型。
+启动后使用 Vercel AI Gateway；开发验证可运行 `pnpm run check` 和 `pnpm run check:package`，不需要 API 密钥。
 
 ## 安装为全局命令
 
@@ -34,9 +35,7 @@ pnpm add --global "$PWD" --ignore-scripts
 
 ```sh
 cd /path/to/project
-loom --demo
-
-# 设置 Vercel AI Gateway 凭据后，直接启动真实智能体
+# 设置 Vercel AI Gateway 凭据后启动
 export AI_GATEWAY_API_KEY='YOUR_GATEWAY_KEY'
 loom
 ```
@@ -50,7 +49,9 @@ export AI_GATEWAY_API_KEY='YOUR_GATEWAY_KEY'
 loom
 
 # 切换同一网关上的模型
-loom --model openai/gpt-5.4
+loom --model openai/gpt-6.1-sol
+loom --model openai/gpt-6.1-sol --reasoning high
+LOOM_MODEL=openai/gpt-6.1-sol loom
 
 # 查看 Vercel 模型目录
 loom --models
@@ -58,6 +59,22 @@ loom --models
 
 当前只支持 Vercel AI Gateway；`--model` 或 `LOOM_MODEL` 选择网关中的模型，认证只读取 `AI_GATEWAY_API_KEY`。不再提供直连供应商和自定义端点参数。必须选择支持工具调用的模型。缺少 Vercel 密钥时会在启动 TUI 前提示。
 
+
+可选的旁路完成检查使用独立决策模型，默认是 Luna Decisions：
+
+先持久化任务完成，再做评估；评估期间崩溃不会让 `resume` 重跑已完成任务，待交付队列仍单独恢复。
+
+```sh
+loom --verify shadow
+loom --verify shadow --decision-model typesafe-ai/jev
+loom --decision-models
+```
+
+默认关闭评估；开启后，在主任务正常结束时检查要求覆盖、无证据的完成声明和缺失验证，仅记录判断，不改变工具、权限、模型上下文或重新执行任务。复用 `AI_GATEWAY_API_KEY` 和 Pi 的 Vercel TypeSafe 兼容 classifier 协议；`LOOM_DECISION_MODEL` 可以选择其他决策模型，聊天模型仍独立配置。不能通过 `--model` 选择决策模型。
+
+每轮最多 3 次决策请求，每次最多 5 秒，不自动重试；证据与问题合计最多 64 KiB，遗漏和截断会标明。评估增加延迟和输入费用；`decision.started` 保存带版本的证据、问题及哈希，`decision.finished` 保存判断、耗时和可获得的用量。服务失败、拒答、格式异常和超时不改变正常执行；用户中断仍停止本轮。崩溃后的决策记录标记为未知，不重放；超时或取消后的实际计费用量可能未知。运行记录包含独立决策计数和合计 token/费用，聊天调用预算保持独立，子代理不评估。
+
+旁路判断需要和人工标注、真实验证结果对照，不能直接视作任务质量真值。可用 `--json --print` 获取 `verification.finished` 事件用于采集数据；测试只使用假模型和本地服务，没有调用付费模型衡量准确率。
 
 历史会话入口：
 
@@ -157,15 +174,16 @@ description: Review JavaScript code quality
 ## 无界面与 SDK
 
 ```sh
-node bin/loom.js --demo --print '查看工作区'
 node bin/loom.js --mode plan --print '分析项目结构' --json
 ```
 
 无界面模式没有交互审批，ask 模式的修改及 ask/edit 模式的 Shell 被拒绝；`--mode edit` 允许文件工具修改，`--mode auto` 允许文件修改和主机命令。失败、中断或恢复阻塞返回非零退出码。
 
-`src/index.js` 导出 Agent、Session、Dispatcher 和模型工厂。产品端只消费事件并提供 `approve(request)`，无需复制执行循环；API 调用方必须先 `initialize()`，用 `enqueue()` / `wait()` 执行，最后 `close()`。
+`src/index.js` 导出 Agent、Session、Dispatcher 和 Vercel 模型工厂。产品端只消费事件并提供 `approve(request)`，无需复制执行循环；API 调用方必须先 `initialize()`，用 `enqueue()` / `wait()` 执行，最后 `close()`。
 
 ## 验证与设计
+
+离线模型仅保留在 `test/fixtures/` 供测试使用，不包含在发布包中；生产 CLI 不提供 `--demo`。
 
 ```sh
 pnpm run check

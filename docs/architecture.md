@@ -1,5 +1,15 @@
 # 架构与前辈实现的取舍
 
+## 决策模型与旁路评估
+
+正常完成先持久化 `task.finished`，再做旁路评估；`unfinishedRun()` 供执行恢复和只读会话目录共用，避免评估中断或崩溃把已完成任务误判为待执行。后续已交付的新输入或新模型步骤仍会使任务恢复为未完成，未交付队列单独恢复。
+
+`src/model/catalog.js` 注册聊天与 classifier 目录；`src/model/decision.js` 使用 Pi 原生 `classify()`，走 Vercel TypeSafe 兼容协议并复用网关认证。默认决策模型是 `openai/gpt-6-luna-decisions`，可选择 `typesafe-ai/jev`；聊天 `complete()` 接口保持独立。协议背景参考 [Vercel Decision 文档](https://vercel.com/docs/ai-gateway/modalities/decision) 和 [OpenAI Decisions 文档](https://developers.openai.com/api/docs/guides/decisions)。
+
+`--verify shadow` 显式启用主任务完成后的观察，每轮最多 3 次，单次最多 5 秒，不重试，不自动增加执行步骤，不评估子代理。`src/core/verification.js` 组合当前交付输入、有限的历史和工具/文件事实，明确标记截断，证据和问题合计限制 64 KiB。三个独立问题判断要求覆盖、无证据声明和缺少验证；答案校验后作为观察记录，不进入聊天上下文或权限流程，不作为完成真值。
+
+`decision.started` 持久化版本、证据、问题和输入哈希后发请求；`decision.finished` 配对保存判断、耗时及返回用量，故障和超时仅记录，用户取消仍中断。恢复时将未结束决策结算为 unknown，不重放。Budget 为决策维护独立调用/用量计数，同时汇总 token 与费用；超时、取消和崩溃的未知用量不伪造为已知零费用。后续用人工标注与真实测试结果评估误报、漏报和延迟，再考虑执行策略。
+
 本文基于本地 2026-10-11 至 12 的源码快照：Pi `c661bc5`、Codex `a9b0815`、OpenCode `3e78cd5`；Claude Code 仓库 `3deb873` 不含完整核心，相关行为参考官方公开文档。
 
 ## 核心边界
@@ -10,7 +20,7 @@ TerminalApp / headless JSON / SDK
        ▼
 Agent: 单会话协调、step、预算、取消、委托
        ├── Context: 指令、skill 索引、模型视图、压缩
-       ├── Model: Vercel AI Gateway 或离线模型
+       ├── Model: Vercel AI Gateway
        └── Dispatcher: 校验 → 授权 → 记录意图 → 执行 → 记录结果
                        ├── 文件与版本检查点
                        ├── ShellExecutor → OS 沙箱与输出 artifact
@@ -31,6 +41,18 @@ TerminalApp 保留终端组件、弹窗句柄、Promise 与关闭流程。订阅
 Agent 继续拥有执行生命周期，Dispatcher 继续拥有授权，Session 的 JSONL 继续负责持久事实与崩溃恢复。UI 中的模式只是执行事件的投影，用户切换仍通过 `agent.setMode()`；语言保存成功后才提交 UI 变化。store 不持久化会话授权、进程、AbortController、未完成流式文本或执行状态。
 
 当前选择 [Zustand vanilla](https://github.com/pmndrs/zustand#using-zustand-without-react)，因为所需的是简单可订阅的界面数据，且可用稳定接口封装依赖。[XState Store](https://stately.ai/docs/xstate-store) 的事件与纯转换也适合这一层；[XState actors](https://stately.ai/docs/actors) 适合以后明确表达执行状态转换和子任务生命周期，届时仍需保留日志提交、取消结算和未知副作用恢复约束。[MobX](https://mobx.js.org/observable-state.html) 更适合观察大量类对象；[Redux](https://redux.js.org/introduction/getting-started) 的 reducer/action 结构适合更多客户端共享事件协议。暂不同时引入多个库。
+
+## 分发与顺序流程
+
+`src/ui/commands.js` 集中声明斜杠命令的名称、别名、参数规则和执行回调；帮助、补全与执行使用同一份注册表。应用只注入命令需要的动作，注册表不持有终端、工具或会话对象。普通文本直接入队，未知命令和错误参数在执行前拒绝。
+
+`src/ui/transitions.js` 按事件名称组织纯状态转换；`uiTransition` 先检查关闭状态和子代理边界，再检查自有事件键并执行一个转换。流式文本、队列和弹窗转换保留各自的前置检查与不可变快照。事件处理表适用于互斥的行为选择，early return 适用于前置条件；工具验证、授权、意图提交、执行和结果结算继续使用显式顺序流程。
+
+## 工具文件读写与结算
+
+`src/io.js` 为 core、tools 和 UI 提供有大小上限的普通文件读取和关闭句柄的同步写入；最终路径不跟随 symlink，FIFO 以非阻塞方式打开后拒绝。工作区文本上限 2 MiB，搜索单文件 256 KiB，输出 artifact 10 MiB，checkpoint JSON 和重新打开的会话日志 16 MiB，锁文件 4 KiB，技能文件 32000 字节，UI 设置 64 KiB。目录列举最多 5000 文件，并在达到上限时提示缩小路径。
+
+文件修改先写入并同步 checkpoint，再提交日志事实，最后替换文件。已有文件使用独占临时文件，版本冲突、写入失败或取消时清理临时文件，替换前再次检查取消。`Dispatcher.authorize()` 保留模式、审批、授权日志与会话授权的检查；未知 effect 被拒绝。工具输出只接受字符串或 `{ text: string, isError: boolean }`，异常契约与非 Error 抛出值仍转换为配对失败结果。此实现改善边界与清理，不消除父目录替换、hardlink 或版本检查到 rename 之间的竞态。
 
 ## 参考实现到我们的机制
 

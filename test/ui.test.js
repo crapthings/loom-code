@@ -7,6 +7,7 @@ import { parseOptions } from '../src/cli.js'
 import { catalogs, translate } from '../src/ui/i18n.js'
 import { LanguagePreferences } from '../src/ui/preferences.js'
 import { selectSession } from '../src/ui/session-picker.js'
+import { writeFile, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { agentFixture, call, deferred, fixture, response } from './helpers.js'
 
@@ -155,6 +156,38 @@ test('untrusted terminal escape sequences cannot become UI control codes', () =>
   assert.equal(safeText('\x1b[2Jhello\x1b]52;c;secret\x07\n世界'), 'hello\n世界')
 })
 
+test('slash command registry keeps help and aliases aligned and validates arguments before effects', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal() })
+  app.bind(agent)
+  t.after(() => app.tui.stop())
+  const inputs = []
+  let stops = 0
+  agent.enqueue = async (text, delivery) => inputs.push({ text, delivery })
+  agent.interrupt = () => stops++
+  await app.submit('/queue\tfirst line\nsecond line')
+  await app.submit(' ordinary task ')
+  assert.deepEqual(inputs, [{ text: 'first line\nsecond line', delivery: 'queue' }, { text: 'ordinary task', delivery: undefined }])
+  await assert.rejects(app.submit('/queue'), /Invalid arguments/)
+  await assert.rejects(app.submit('/stop unwanted'), /Invalid arguments/)
+  for (const name of ['missing', 'toString', 'constructor', '__proto__']) {
+    await assert.rejects(app.submit(`/${name}`), /Unknown command/)
+  }
+  assert.equal(stops, 0)
+  assert.equal(inputs.length, 2)
+  await app.submit('/stop')
+  assert.equal(stops, 1)
+  await app.submit('/help')
+  const help = app.transcript.render(120).join('\n')
+  for (const command of app.commandList()) assert.ok(help.includes(`/${command.name} —`))
+  await app.submit('/permissions plan')
+  assert.equal(agent.mode, 'plan')
+  await app.submit('/lang zh-CN')
+  assert.equal(app.language, 'zh-CN')
+  await assert.rejects(app.submit('/stop unwanted'), /参数不正确/)
+  assert.equal(model.requests.length, 0)
+})
+
 test('startup session picker excludes busy sessions and restores terminal on selection and cancellation', async () => {
   const terminal = new FakeTerminal()
   const sessions = Array.from({ length: 12 }, (_, i) => ({ id: `session-${i}`, title: `Task ${i}`, updated: Date.now(), status: 'completed', pending: 0, busy: i === 0 }))
@@ -275,6 +308,34 @@ test('language save failures leave the current UI unchanged and catalogs preserv
   assert.throws(() => translate('de', 'approval.deny'), /Unsupported/)
 })
 
+test('settings reads reject oversized files and final symlinks', async t => {
+  const { cwd } = await fixture(t)
+  const file = path.join(cwd, 'settings.json')
+  await writeFile(file, ' '.repeat(64 * 1024 + 1))
+  const preferences = new LanguagePreferences(file)
+  await assert.rejects(preferences.load(), error => error.cause?.code === 'LOOM_TEXT_LIMIT')
+  const linked = path.join(cwd, 'linked-settings.json')
+  await symlink(file, linked)
+  await assert.rejects(new LanguagePreferences(linked).load(), error => error.cause?.code === 'ELOOP')
+})
+
+test('approval cancelled during overlay creation closes without waiting for keyboard input', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal() })
+  app.bind(agent)
+  t.after(() => app.shutdown())
+  const controller = new AbortController()
+  const showDialog = app.showDialog.bind(app)
+  app.showDialog = (...args) => {
+    const overlay = showDialog(...args)
+    controller.abort()
+    return overlay
+  }
+  assert.equal(await app.approve({ call: call('shell'), effect: 'shell', args: {}, signal: controller.signal }), false)
+  assert.equal(app.tui.hasOverlay(), false)
+  assert.equal(app.store.getState().dialogs.length, 0)
+})
+
 test('slash permission commands update the runtime, prompt, tools, and header together', async t => {
   const { cwd, session, model, agent } = await agentFixture(t, [])
   const terminal = new FakeTerminal()
@@ -306,7 +367,7 @@ test('CLI validates budgets, modes, and rejects provider selection', () => {
   assert.throws(() => parseOptions(['--steps', 'NaN']), /integer/)
   assert.throws(() => parseOptions(['--mode', 'unsafe']), /mode/)
   assert.throws(() => parseOptions(['--provider', 'google']), /Unknown option/)
-  assert.equal(parseOptions(['--demo', '--mode', 'plan']).demo, true)
+  assert.throws(() => parseOptions(['--demo']), /Unknown option/)
   assert.equal(parseOptions(['--mode', 'auto']).sandbox, 'required')
   assert.equal(parseOptions(['--sandbox', 'off']).sandbox, 'off')
   assert.throws(() => parseOptions(['--sandbox', 'best-effort']), /sandbox/)

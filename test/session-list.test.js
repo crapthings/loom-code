@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { appendFile, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { listSessions } from '../src/core/session-list.js'
@@ -53,6 +53,16 @@ test('catalog skips malformed and symlinked logs without following metadata dire
   assert.equal(catalog.skipped, 2)
 })
 
+test('catalog rejects FIFO metadata without blocking the session picker', async t => {
+  const { cwd, session } = await fixture(t)
+  const directory = path.join(path.dirname(session.directory), 'fifo')
+  await mkdir(directory)
+  execFileSync('/usr/bin/mkfifo', [path.join(directory, 'events.jsonl')])
+  const catalog = await listSessions(cwd)
+  assert.equal(catalog.sessions.length, 1)
+  assert.equal(catalog.skipped, 1)
+})
+
 test('resume CLI lists without credentials or writes and refuses missing or busy selections', async t => {
   const { cwd, session } = await fixture(t)
   const before = await readdir(path.dirname(session.directory))
@@ -68,7 +78,7 @@ test('resume CLI lists without credentials or writes and refuses missing or busy
   assert.equal(busy.status, 1)
   assert.match(busy.stderr, /already open/)
   await session.close()
-  const resumed = spawnSync(process.execPath, [entry, 'resume', '--last', '--demo', '--resume', '--json', '--cwd', cwd], { encoding: 'utf8', env })
+  const resumed = spawnSync(process.execPath, [entry, 'resume', '--last', '--resume', '--json', '--cwd', cwd], { encoding: 'utf8', env: { ...env, AI_GATEWAY_API_KEY: 'offline-test-unused' } })
   assert.equal(resumed.status, 0, resumed.stderr)
   const events = resumed.stdout.trim().split('\n').map(JSON.parse)
   assert.ok(events.some(event => event.type === 'resume.skipped'))

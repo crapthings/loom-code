@@ -5,15 +5,26 @@ import { sandboxStatus } from '../execution/executor.js'
 import { SelectionDialog, dialogOptions } from './dialog.js'
 import { catalogs, translate } from './i18n.js'
 import { createUiStore } from './store.js'
+import { createCommands } from './commands.js'
 import { randomUUID } from 'node:crypto'
-
-// commands describes the terminal commands offered by the editor's completion menu.
-const commands = ['help', 'mode', 'permissions', 'language', 'lang', 'sandbox', 'queue', 'stop', 'continue', 'compact', 'undo', 'status', 'exit']
 
 // TerminalApp presents a scrollable transcript, persistent editor, execution status, and cancellable approvals.
 export class TerminalApp {
   constructor ({ cwd, session, model, mode, sandbox = 'required', language = 'en', saveLanguage = async () => {}, terminal = new ProcessTerminal() }) {
     this.store = createUiStore({ language, mode })
+    this.commands = createCommands({
+      help: () => this.showHelp(),
+      mode: input => this.switchMode(input),
+      language: input => this.switchLanguage(input),
+      sandbox: () => this.showSandbox(),
+      queue: input => this.agent.enqueue(input, 'queue'),
+      stop: () => this.agent.interrupt(),
+      continue: () => this.agent.resume(),
+      compact: () => this.compactContext(),
+      undo: () => this.agent.undo(),
+      status: () => this.showStatus(),
+      exit: () => this.shutdown()
+    }, (key, values) => this.t(key, values))
     this.saveLanguage = saveLanguage
     this.tui = new TuiAltScreen(terminal)
     this.transcript = new Container()
@@ -67,7 +78,7 @@ export class TerminalApp {
 
   t (key, values) { return translate(this.language, key, values) }
 
-  commandList () { return commands.map(name => ({ name, description: this.t(`command.${name}`) })) }
+  commandList () { return this.commands.list() }
 
   executionLabel (label = this.agent?.executor.label || this.sandbox) {
     return label.replace('UNSANDBOXED HOST', this.t('sandbox.off')).replace('network denied', this.t('sandbox.denied'))
@@ -106,6 +117,7 @@ export class TerminalApp {
   }
 
   add (label, text) {
+    if (this.store.getState().closed) return
     const component = new Text(`${colors.accent(label)}\n${safeText(text)}`, 1, 1)
     this.transcript.addChild(component)
     this.tui.requestRender()
@@ -123,6 +135,11 @@ export class TerminalApp {
     if (event.type === 'mode.changed') { this.updateMode(event.mode); return }
     if (event.type === 'permission.granted') this.add(this.t('label.permissions'), this.t('grant.notice', { tool: event.tool }))
     if (event.type === 'resume.skipped') this.add(this.t('label.session'), this.t('resume.empty'))
+    if (event.type === 'verification.finished') {
+      const text = event.status === 'completed' ? this.t('verification.result', { coverage: this.t(`verification.${event.answers.coverage.choice}`) }) : this.t('verification.unavailable', { status: event.status })
+      this.add(this.t('verification.label'), text)
+      this.refreshStatus(this.agent.status, event.budget)
+    }
     if (event.type === 'queued') this.queuedComponents.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
     if (event.type === 'user') {
       const component = this.queuedComponents.get(event.inputId)
@@ -216,7 +233,10 @@ export class TerminalApp {
       const title = colors.warning(this.t(effect === 'shell' ? 'approval.shell' : 'approval.write', { boundary: this.executionLabel() }))
       const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
       const overlay = this.showDialog('approval', dialog, { callId: call.id, effect })
+      let settled = false
       const finish = allowed => {
+        if (settled) return
+        settled = true
         signal.removeEventListener('abort', abort)
         overlay.hide()
         this.tui.requestRender()
@@ -226,6 +246,7 @@ export class TerminalApp {
       choices.onSelect = item => finish(item.value === 'session' ? 'session' : item.value === 'allow')
       choices.onCancel = () => finish(false)
       signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
       this.tui.requestRender()
     })
   }
@@ -245,23 +266,33 @@ export class TerminalApp {
     }
   }
 
+  showHelp () {
+    this.add(this.t('label.commands'), this.commandList().map(command => `/${command.name} — ${command.description}`).join('\n'))
+  }
+
+  showStatus () {
+    this.add(this.t('label.session'), this.t('session.details', { id: this.session.id, log: this.session.directory, pending: this.session.pending.length, status: this.statusLabel(this.agent.status) }))
+  }
+
+  async showSandbox () {
+    const status = await sandboxStatus()
+    if (this.closing) return
+    this.add(this.t('label.sandbox'), `${this.executionLabel()}\n${JSON.stringify(status, null, 2)}\n${this.t('sandbox.details')}`)
+  }
+
+  async compactContext () {
+    await this.agent.compact()
+    if (this.closing) return
+    this.add(this.t('label.context'), this.t('context.compacted'))
+  }
+
   async submit (input) {
     if (this.closing) return
     const text = input.trim()
     if (!text) return
-    if (/^\/(mode|permissions)(\s|$)/.test(text)) return this.switchMode(text.split(/\s+/).slice(1).join(' '))
-    if (/^\/(language|lang)(\s|$)/.test(text)) return this.switchLanguage(text.split(/\s+/).slice(1).join(' '))
-    if (text === '/exit') return this.shutdown()
-    if (text === '/stop') return this.agent.interrupt()
-    if (text === '/sandbox') { this.add(this.t('label.sandbox'), `${this.executionLabel()}\n${JSON.stringify(await sandboxStatus(), null, 2)}\n${this.t('sandbox.details')}`); return }
-    if (text === '/continue') return this.agent.resume()
-    if (text === '/compact') { await this.agent.compact(); this.add(this.t('label.context'), this.t('context.compacted')); return }
-    if (text === '/undo') { await this.agent.undo(); return }
-    if (text === '/status') { this.add(this.t('label.session'), this.t('session.details', { id: this.session.id, log: this.session.directory, pending: this.session.pending.length, status: this.statusLabel(this.agent.status) })); return }
-    if (text === '/help') { this.add(this.t('label.commands'), this.commandList().map(command => `/${command.name} — ${command.description}`).join('\n')); return }
-    if (text.startsWith('/queue ')) return this.agent.enqueue(text.slice(7), 'queue')
-    if (text.startsWith('/')) throw new Error(this.t('command.unknown'))
-    return this.agent.enqueue(text)
+    if (!text.startsWith('/')) return this.agent.enqueue(text)
+    const [, name, argument = ''] = text.match(/^\/(\S*)(?:\s+([\s\S]*))?$/)
+    return this.commands.execute(name, argument)
   }
 
   async shutdown () {

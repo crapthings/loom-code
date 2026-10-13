@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Add opt-in completion shadow evaluation with a separate Luna Decisions/Jev classifier adapter, bounded evidence, decision budgets, cancellation/deadlines, durable evaluation records, and offline protocol tests.
+
+- Share bounded file IO across modules, read reopened journals through their owned handles, reject invalid lock owners, make sandbox cleanup idempotent, and clear failed UI streams.
+
+- Share automatic/manual operation ownership and cleanup, handle synchronous failures, and discard cancelled compaction responses while accounting for returned usage.
+
+- Document and regression-test `openai/gpt-6.1-sol` through the bundled Vercel Gateway catalog, including model selection, reasoning, streamed text, and tool-call forwarding.
+
+- Harden tool text reads against special files, final symlinks, and oversized input; clean temporary replacements on conflict/cancellation, enforce tree limits, and validate tool effects/results before model feedback.
+
+- Centralize slash commands, aliases, argument checks, help, and completion in one registry; dispatch UI events through named pure transitions while retaining lifecycle guards.
+
+- Move the offline model to test fixtures and remove the public `--demo` option, demo script, and SDK export; package smoke checks inject the fixture through the SDK.
+
 - Add workspace-scoped `loom resume` selection, explicit IDs, `--last`, and read-only text/JSON session catalogs with lock and child-session filtering.
 
 - Continue only unfinished work or saved inputs; preserve prior tool evidence, resume interrupted work before queued tasks, and coalesce simultaneous resume requests.

@@ -7,13 +7,15 @@ import { discoverSkills, skillTool } from './skills.js'
 import { latestCheckpoint } from '../tools/checkpoints.js'
 import { validateMode } from './modes.js'
 import { ShellExecutor } from '../execution/executor.js'
+import { verifyCompletion } from './verification.js'
 
 // Agent coordinates durable input, model steps, tools, and read-only child sessions.
 export class Agent {
-  constructor ({ cwd, session, model, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget, sandbox = 'required', executor = new ShellExecutor({ cwd, sandbox }) }) {
+  constructor ({ cwd, session, model, decisionModel, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget, sandbox = 'required', executor = new ShellExecutor({ cwd, sandbox }) }) {
     this.cwd = cwd
     this.session = session
     this.model = model
+    this.decisionModel = decisionModel
     this.mode = validateMode(mode)
     this.emit = emit
     this.steps = steps
@@ -54,13 +56,22 @@ export class Agent {
 
   wake () {
     if (this.running || this.blocked || this.closed) return
+    this.startOperation('running', this.sharedBudget || new Budget({ steps: this.steps }), signal => this.drain(signal))
+  }
+
+  startOperation (status, budget, action) {
+    this.status = status
     this.controller = new AbortController()
-    this.budget = this.sharedBudget || new Budget({ steps: this.steps })
+    this.budget = budget
     const controller = this.controller
-    const timer = setTimeout(() => controller.abort(new Error('Run time budget exhausted')), Math.max(1, this.budget.deadline - Date.now()))
-    this.running = this.drain(controller.signal).catch(error => {
+    const timer = setTimeout(() => controller.abort(new Error('Run time budget exhausted')), Math.max(1, budget.deadline - Date.now()))
+    const task = Promise.resolve().then(() => {
+      controller.signal.throwIfAborted()
+      return action(controller.signal)
+    })
+    this.running = task.then(() => { this.status = 'idle' }).catch(error => {
       this.status = controller.signal.aborted ? 'interrupted' : 'failed'
-      this.emit({ type: 'error', text: error.message })
+      this.emit({ type: 'error', text: error instanceof Error ? error.message : String(error) })
     }).finally(() => {
       clearTimeout(timer)
       this.running = null
@@ -68,6 +79,8 @@ export class Agent {
       this.emit({ type: 'status', text: this.status, budget: this.budget })
       if (this.status === 'idle' && this.session.pending.length) this.wake()
     })
+    this.emit({ type: 'status', text: status })
+    return task
   }
 
   async drain (signal) {
@@ -77,11 +90,13 @@ export class Agent {
     this.emit({ type: 'status', text: this.status })
     try {
       let continuing = false
+      let taskFrom = this.session.events.length
       while (true) {
         signal.throwIfAborted()
         const pending = this.session.pending
         const steers = pending.filter(input => input.delivery === 'steer')
         const selected = steers.length ? steers : continuing ? [] : pending.slice(0, 1)
+        if (!continuing && selected.length) taskFrom = this.session.events.length
         for (const input of selected) {
           await this.session.append('inbox.delivered', { message: { role: 'user', content: input.text, timestamp: Date.now() }, inputId: input.inputId })
           this.emit({ type: 'user', text: input.text, inputId: input.inputId })
@@ -95,12 +110,19 @@ export class Agent {
         if (['error', 'aborted'].includes(response.stopReason)) throw new Error(response.errorMessage || 'Model response failed')
         if (response.stopReason === 'length') throw new Error('Model response exceeded output limit; incomplete tools were not executed')
         continuing = calls.length > 0
+        if (!continuing && response.stopReason === 'stop') {
+          await this.session.append('task.finished', { runId, from: taskFrom })
+          if (this.decisionModel) {
+            await verifyCompletion({ session: this.session, model: this.decisionModel, budget: this.budget, from: taskFrom, signal, emit: this.emit })
+            signal.throwIfAborted()
+          }
+        }
       }
       this.status = 'idle'
-      await this.session.append('run.finished', { runId, status: 'completed', calls: this.budget.calls, tokens: this.budget.tokens, cost: this.budget.cost })
+      await this.session.append('run.finished', { runId, status: 'completed', calls: this.budget.calls, tokens: this.budget.tokens, cost: this.budget.cost, decisions: { calls: this.budget.decisionCalls, tokens: this.budget.decisionTokens, cost: this.budget.decisionCost } })
     } catch (error) {
       this.status = signal.aborted ? 'interrupted' : 'failed'
-      await this.session.append('run.finished', { runId, status: this.status, error: error.message, calls: this.budget.calls, tokens: this.budget.tokens, cost: this.budget.cost })
+      await this.session.append('run.finished', { runId, status: this.status, error: error instanceof Error ? error.message : String(error), calls: this.budget.calls, tokens: this.budget.tokens, cost: this.budget.cost, decisions: { calls: this.budget.decisionCalls, tokens: this.budget.decisionTokens, cost: this.budget.decisionCost } })
       throw error
     }
   }
@@ -203,24 +225,7 @@ export class Agent {
   manual (status, action) {
     if (this.running) throw new Error('Interrupt or wait for the agent before this operation')
     if (this.closed) throw new Error('Agent has closed')
-    this.status = status
-    this.controller = new AbortController()
-    this.budget = new Budget({ steps: 3 })
-    const controller = this.controller
-    const timer = setTimeout(() => controller.abort(), this.budget.deadline - Date.now())
-    const task = action(controller.signal)
-    this.running = task.then(() => { this.status = 'idle' }).catch(error => {
-      this.status = controller.signal.aborted ? 'interrupted' : 'failed'
-      this.emit({ type: 'error', text: error.message })
-    }).finally(() => {
-      clearTimeout(timer)
-      this.controller = null
-      this.running = null
-      this.emit({ type: 'status', text: this.status, budget: this.budget })
-      if (this.status === 'idle' && this.session.pending.length) this.wake()
-    })
-    this.emit({ type: 'status', text: status })
-    return task
+    return this.startOperation(status, new Budget({ steps: 3 }), action)
   }
 
   async wait () {

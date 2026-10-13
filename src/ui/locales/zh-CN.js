@@ -1,5 +1,11 @@
 // zhCN contains Simplified Chinese interface messages matching the English catalog keys.
 export const zhCN = {
+  'verification.label': '旁路质量评估',
+  'verification.result': '观察到的要求覆盖情况：{coverage}。已记录供评估，执行行为保持不变。',
+  'verification.unavailable': '评估未完成（{status}），执行行为保持不变。',
+  'verification.complete': '证据支持',
+  'verification.incomplete': '发现未满足的要求',
+  'verification.unknown': '证据不足',
   'label.welcome': '欢迎',
   'label.you': '你',
   'label.error': '错误',
@@ -73,6 +79,7 @@ export const zhCN = {
   'dialog.truncated': '… 参数预览已截断',
   'context.compacted': '压缩完成，原始历史已保留。',
   'session.details': '编号：{id}\n日志：{log}\n待处理：{pending}\n状态：{status}',
+  'command.arguments': '/{command} 的参数不正确；请查看 /help',
   'command.unknown': '未知命令；使用 /help 查看帮助',
   'command.help': '查看操作说明和命令',
   'command.mode': '切换 ask / edit / auto / plan 权限',

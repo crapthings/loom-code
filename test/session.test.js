@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFile, mkdir, readFile, symlink } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Session } from '../src/core/session.js'
 import { call, fixture, response } from './helpers.js'
@@ -20,6 +20,30 @@ test('inbox delivery and its visible message commit as one durable fact', async 
 test('another writer cannot open a live session', async t => {
   const { cwd, session } = await fixture(t)
   await assert.rejects(Session.open(cwd, session.id), /already open/)
+})
+
+test('invalid lock owners are not reclaimed or passed to process signaling', async t => {
+  const { cwd, session } = await fixture(t)
+  await session.close()
+  const lock = path.join(session.directory, 'lock')
+  for (const pid of [0, -1, '123', null]) {
+    const text = JSON.stringify({ pid })
+    await writeFile(lock, text)
+    await assert.rejects(Session.open(cwd, session.id), /Invalid session lock owner/)
+    assert.equal(await readFile(lock, 'utf8'), text)
+  }
+})
+
+test('oversized journals fail before repair and release their writer lock', async t => {
+  const { cwd, session } = await fixture(t)
+  await session.close()
+  const file = path.join(session.directory, 'events.jsonl')
+  const handle = await open(file, 'r+')
+  try { await handle.truncate(16 * 1024 * 1024 + 1) } finally { await handle.close() }
+  await assert.rejects(Session.open(cwd, session.id), { code: 'LOOM_TEXT_LIMIT' })
+  await assert.rejects(readFile(path.join(session.directory, 'lock')), { code: 'ENOENT' })
+  const check = await open(file, 'r')
+  try { assert.equal((await check.stat()).size, 16 * 1024 * 1024 + 1) } finally { await check.close() }
 })
 
 test('a torn final append is removed before adding new records', async t => {

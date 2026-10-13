@@ -61,12 +61,17 @@ export class ShellExecutor {
     let scratch
     let initialized = false
     let wrapped = false
-    const cleanup = async () => {
+    let cleaning
+    const clean = async () => {
       try {
         try { if (wrapped) this.manager.cleanupAfterCommand() } finally { if (initialized) await this.manager.reset() }
       } finally {
         try { if (scratch) await rm(scratch, { recursive: true, force: true }) } finally { release() }
       }
+    }
+    const cleanup = () => {
+      cleaning ||= clean()
+      return cleaning
     }
     try {
       signal.throwIfAborted()

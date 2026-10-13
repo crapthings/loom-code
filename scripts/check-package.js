@@ -16,6 +16,20 @@ function run (command, args, cwd) {
   return result.stdout
 }
 
+// checkDocumentationLinks rejects relative document targets missing from the extracted package.
+async function checkDocumentationLinks (directory, files) {
+  for (const file of files.filter(file => file.endsWith('.md'))) {
+    const document = path.join(directory, file)
+    const text = await readFile(document, 'utf8')
+    for (const [, link] of text.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
+      if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(link)) continue
+      const target = path.resolve(path.dirname(document), decodeURIComponent(link.split('#')[0]))
+      assert.ok(target.startsWith(`${directory}${path.sep}`), `Document link leaves the package: ${file} → ${link}`)
+      assert.ok((await stat(target)).isFile(), `Missing document target: ${file} → ${link}`)
+    }
+  }
+}
+
 // checkPackage verifies the archive allowlist and runs its entry point in a temporary workspace.
 async function checkPackage () {
   const temporary = await mkdtemp(path.join(tmpdir(), 'loom-package-'))
@@ -26,13 +40,14 @@ async function checkPackage () {
     const archive = path.join(temporary, archives[0])
     const files = run('tar', ['-tzf', archive], root).trim().split('\n')
     for (const file of files) {
-      assert.match(file, /^package\/(?:bin\/|src\/|docs\/(?:architecture|sandbox)\.md$|package\.json$|README(?:\.zh-CN)?\.md$|LICENSE$|NOTICE$)/, `Unexpected packaged file: ${file}`)
+      assert.match(file, /^package\/(?:bin\/|src\/|docs\/(?:architecture|sandbox|releasing)\.md$|package\.json$|README(?:\.zh-CN)?\.md$|LICENSE$|NOTICE$|AGENTS\.md$|CONTRIBUTING\.md$|SECURITY\.md$|CHANGELOG\.md$|\.env\.example$)/, `Unexpected packaged file: ${file}`)
       assert.doesNotMatch(file, /(?:^|\/)\.\.(?:\/|$)/)
     }
     assert.ok(!files.includes('package/src/model/demo.js'))
-    for (const required of ['bin/loom.js', 'src/index.js', 'LICENSE', 'NOTICE']) assert.ok(files.includes(`package/${required}`), `Missing ${required}`)
+    for (const required of ['bin/loom.js', 'src/index.js', 'LICENSE', 'NOTICE', 'AGENTS.md', 'CONTRIBUTING.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/releasing.md', '.env.example']) assert.ok(files.includes(`package/${required}`), `Missing ${required}`)
     run('tar', ['-xzf', archive, '-C', temporary], root)
     const packed = path.join(temporary, 'package')
+    await checkDocumentationLinks(packed, files.map(file => file.slice('package/'.length)))
     const manifest = JSON.parse(await readFile(path.join(packed, 'package.json'), 'utf8'))
     assert.equal(manifest.bin.loom, 'bin/loom.js')
     assert.equal(manifest.exports, './src/index.js')

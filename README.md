@@ -49,7 +49,7 @@ The global installation links to this checkout. Keep the checkout and its depend
 - Delegate research and review to read-only agents sharing the run budget.
 - Accept steering during active work, queue follow-up tasks, and interrupt execution.
 - Reopen local sessions and explicitly continue unfinished work.
-- Recall source-linked history from the current session or other root sessions in the same workspace.
+- Recall source-linked history and explicitly saved project memory.
 - Record optional completion judgments from a separate decision model.
 
 Root `AGENTS.md` supplies project instructions. Skills in `.agents/skills/NAME/SKILL.md` are discovered and loaded on demand. Delegated agents cannot write files, change permissions, or delegate further.
@@ -138,7 +138,7 @@ loom --models
 
 CLI flags override the corresponding environment variables. Reasoning levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. The default run deadline is 15 minutes; delegated work, compaction, and explicit retries share the chat-call budget.
 
-`loom --models` and `loom --decision-models` read the pinned model catalog without API calls. Catalog metadata and cost estimates can differ from current gateway availability, limits, or billing. Direct providers and custom endpoints are not supported. [`.env.example`](.env.example) documents environment variables; Loom does **not** automatically load `.env` files.
+`loom --models` and `loom --decision-models` read the pinned model catalog without API calls. Catalog metadata and cost estimates can differ from current gateway availability, limits, or billing. Direct providers, custom endpoints and `LOOM_PROVIDER` are not supported. [`.env.example`](.env.example) documents environment variables; Loom does **not** automatically load `.env` files.
 
 ## Optional completion evaluation
 
@@ -154,9 +154,7 @@ Shadow evaluation is off by default. Its default model is `openai/gpt-6-luna-dec
 
 After a root task ends normally, Loom commits task completion before evaluating bounded task evidence. The judgment is displayed and saved, but does not change permissions, tool execution, the chat model's context, or trigger a retry. Child tasks are not evaluated.
 
-Each run permits at most three decision calls, with a five-second deadline per call and no transport retries. Failures, refusals, malformed responses, and timeouts leave the task result intact. Interrupted decision calls are not replayed during recovery. Calls can add latency and billed usage; usage may be unknown after a timeout or interruption.
-
-Session records preserve evaluation inputs, their hash, answers, timing, and reported usage. Headless JSON output includes `verification.finished` events. These judgments are observations, not correctness guarantees: compare them with human-reviewed results and actual tests before using them to drive execution policy. Automated tests use fake classifiers and do not establish live-model accuracy.
+Each run permits at most three decision calls, with a five-second deadline per call and no transport retries. Failures leave the completed task intact; calls may add latency and billed usage. Results are saved and exposed as `verification.finished` in headless JSON. They are observations, not correctness guarantees. See the [architecture guide](docs/architecture.md) for evidence and recovery details.
 
 ## Sessions and recovery
 
@@ -174,15 +172,23 @@ loom resume --list --json     # Machine-readable session catalog
 
 The picker shows the first task, update time, execution state, and pending input count. Only root sessions in the current workspace are selectable; busy sessions are visible in lists but cannot be opened. In a non-terminal environment, plain `loom resume` lists sessions.
 
-Context is rebuilt from the journal on each step. Compaction retains recent complete exchanges and separately carries bounded current-task inputs and tool-outcome references, marking any omissions. Output and safety space are reserved before requests; automatic compaction must reduce estimated input size. Original history remains on disk; automatic cross-session memory is not yet implemented.
+Context is rebuilt from the journal on each step. Compaction retains recent complete exchanges and separately carries bounded current-task inputs and tool-outcome references, marking any omissions. Output and safety space are reserved before requests; automatic compaction must reduce estimated input size. Original history remains on disk; explicit project memory is described below.
 
 The model can use `search_history` to search literal text and `read_history` to read original events by sequence, including evidence omitted by compaction. Search defaults to the current session; workspace scope includes other root sessions in this project. Delegated agents can only recall their own session. Results are historical evidence and must be rechecked when code or requirements have changed.
 
-Search lazily builds `.loom/history.sqlite` using Node's built-in SQLite and FTS5 in a Worker. The cache tracks source fingerprints, event watermarks, and prefix hashes; changed sources update the index and invalid sources are excluded. Deleting the cache while Loom is closed allows rebuilding from JSONL. A corrupt cache produces a search tool error; reading original events and ordinary agent execution remain independent. Session listing stays read-only and continues scanning journals. Node may print an experimental SQLite warning on supported runtimes.
+Search lazily builds a rebuildable `.loom/history.sqlite` cache in a Worker. Close Loom before deleting that cache; source reads and session recovery remain independent. Node may print an experimental SQLite warning. Session listing still scans journals without modifying them. Storage limits and implementation details are in the [architecture guide](docs/architecture.md).
 
 Recovery uses recorded tool results rather than automatically replaying effects. A tool call started without a recorded outcome is marked unknown and blocks execution until you inspect the outcome and explicitly continue. The model can still request another operation, so this is not an exactly-once guarantee. Unfinished work resumes before queued tasks; a crash during shadow evaluation does not reopen an already completed task.
 
 Session listing scans local logs and skips unreadable, malformed, or oversized logs with a count. There is no incremental catalog index yet. See [architecture and recovery invariants](docs/architecture.md) for details.
+
+## Project memory
+
+Ask Loom to “remember that this project uses pnpm” to save a source-backed record with `remember`. Memory writes use ordinary mode permissions: approval in `ask`, automatic in `edit`/`auto`, unavailable in `plan`. The model is instructed to save only on explicit user requests; there is no background extraction or automatic injection into every prompt. Relevant recall uses `list_memories` and `get_memory`; the latter checks original source events. Find source sequences through `search_history`/`read_history`.
+
+Use `/memory` to browse active records, `/memory all` to include inactive records, or `/memory ID` to inspect provenance. Records support project or relative-path scope, optional expiration, immutable revisions and version-checked updates. `forget_memory` marks records stale or archived; it retains earlier revisions and is **not physical deletion**. Source hashes detect changed or unavailable evidence, not whether code still matches a remembered fact. Listings leave sources unchecked; inspect a record before relying on it.
+
+`.loom/memory.sqlite` is authoritative storage, separate from the rebuildable history cache. **Do not delete it to rebuild history.** Close Loom before backing up its metadata. Records and journals may contain private information; avoid saving secrets. Memory is local to the current workspace, without global or shared worktree memory. Cancellation or a crash can leave a committed mutation with an unknown journal outcome: inspect records before retrying. Identical call receipts prevent duplicate execution only for the same session/call identity, not arbitrary retries.
 
 ## Headless use
 
@@ -208,10 +214,11 @@ The TUI and headless CLI share the same core:
 | `src/core/` | Agent loop, durable sessions, recovery, budgets, and completion evaluation |
 | `src/model/` | Gateway chat and decision-model adapters |
 | `src/tools/` | Tool definitions, permission dispatch, file checkpoints, and delegation |
+| `src/storage/` | SQLite Workers for history and explicit memory |
 | `src/execution/` | Shell execution, sandbox configuration, and cancellation |
 | `src/ui/` | Terminal rendering, transient state, commands, and translations |
 
-`src/index.js` exports `Agent`, `Session`, `Dispatcher`, `createTools`, chat and decision model factories/catalogs, `ShellExecutor`, `sandboxStatus`, and `HistoryStore`. SDK clients must initialize the agent before enqueueing work, wait for completion, and always close it. Standalone `HistoryStore` clients must also close their Worker.
+`src/index.js` exports `Agent`, `Session`, `Dispatcher`, `createTools`, chat and decision model factories/catalogs, `ShellExecutor`, `sandboxStatus`, `HistoryStore`, and `MemoryStore`. SDK clients must initialize the agent before enqueueing work, wait for completion, and always close it. Standalone storage clients must also close their Worker.
 
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
@@ -228,12 +235,3 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md), the [architecture guide](docs/arc
 Loom Code is licensed under [MIT](LICENSE). Pi dependencies retain their MIT licenses; Anthropic sandbox-runtime retains its Apache-2.0 license. See [NOTICE](NOTICE).
 
 The design draws on Pi, Codex, OpenCode, and publicly documented Claude Code behavior. Loom's orchestration is implemented in this repository; it does not rely on access to Claude Code's private runtime.
-
-
-## Explicit project memory
-
-Ask Loom to “remember that this project uses pnpm” to save a source-backed record with `remember`. Memory writes use ordinary mode permissions: approval in `ask`, automatic in `edit`/`auto`, unavailable in `plan`. The model is instructed to save only on explicit user requests; there is no background extraction or automatic injection into every prompt. Relevant recall uses `list_memories` and `get_memory`; the latter checks original source events. Find source sequences through `search_history`/`read_history`.
-
-Use `/memory` to browse active records, `/memory all` to include inactive records, or `/memory ID` to inspect provenance. Records support project or relative-path scope, optional expiration, immutable revisions and version-checked updates. `forget_memory` marks records stale or archived; it retains earlier revisions and is **not physical deletion**. Source hashes detect changed or unavailable evidence, not whether code still matches a remembered fact. Listings leave sources unchecked; inspect a record before relying on it.
-
-`.loom/memory.sqlite` is authoritative storage, separate from the rebuildable history cache. **Do not delete it to rebuild history.** Close Loom before backing up its metadata. Records and journals may contain private information; avoid saving secrets. Memory is local to the current workspace, without global or shared worktree memory. Cancellation or a crash can leave a committed mutation with an unknown journal outcome: inspect records before retrying. Identical call receipts prevent duplicate execution only for the same session/call identity, not arbitrary retries.

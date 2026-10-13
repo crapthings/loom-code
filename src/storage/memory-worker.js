@@ -83,7 +83,7 @@ class MemoryDatabase {
       if (!Number.isInteger(reference.seq) || reference.seq < 0) throw new Error('Invalid memory source sequence')
       const source = await this.source(cache, reference.sessionId)
       const event = source.events[reference.seq]
-      if (!event || !((event.type === 'inbox.delivered' && event.message?.role === 'user') || (event.type === 'tool.finished' && event.message?.role === 'toolResult' && event.status === 'completed' && event.executed !== false && !event.message.isError && !['search_history', 'read_history', 'list_memories', 'get_memory', 'remember', 'forget_memory'].includes(event.message.toolName)))) throw new Error('Memory sources must be original user input or successful tool evidence, not model claims or recalled copies')
+      if (!event || !((event.type === 'inbox.delivered' && event.message?.role === 'user') || (event.type === 'tool.finished' && event.message?.role === 'toolResult' && event.status === 'completed' && event.executed === true && !event.message.isError && !['search_history', 'read_history', 'list_memories', 'get_memory', 'remember', 'forget_memory'].includes(event.message.toolName)))) throw new Error('Memory sources must be original user input or successful tool evidence, not model claims or recalled copies')
       result.push({ sessionId: reference.sessionId, seq: reference.seq, eventId: event.id, digest: digest(event), role: event.message.role })
     }
     return result

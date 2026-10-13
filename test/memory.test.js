@@ -62,7 +62,8 @@ test('memory rejects model claims, recalled copies, cancelled effects and foreig
     await session.append('message', { message: response('Invented fact') })
     await session.append('tool.finished', { status: 'completed', message: { role: 'toolResult', toolName: 'read_history', content: 'copy', isError: false } })
     await session.append('tool.finished', { status: 'cancelled', message: { role: 'toolResult', toolName: 'read_file', content: 'partial', isError: false } })
-    for (const seq of [2, 3, 4]) await assert.rejects(memory.request('save', { ...args, operationId: `bad-${seq}`, sources: [{ sessionId: session.id, seq }] }), /original user input/)
+    await session.append('tool.finished', { status: 'completed', message: { role: 'toolResult', toolName: 'read_file', content: 'legacy evidence without execution status', isError: false } })
+    for (const seq of [2, 3, 4, 5]) await assert.rejects(memory.request('save', { ...args, operationId: `bad-${seq}`, sources: [{ sessionId: session.id, seq }] }), /original user input/)
     await assert.rejects(memory.request('save', { ...args, operationId: 'foreign', sources: [{ sessionId: '../escape', seq: 1 }] }), /Invalid history/)
   } finally { await memory.close() }
 })

@@ -5,7 +5,7 @@ import { Session } from './core/session.js'
 import { listSessions } from './core/session-list.js'
 import { selectSession } from './ui/session-picker.js'
 import { translate } from './ui/i18n.js'
-import { createModel, listModels, defaultProvider, defaultModel } from './model/provider.js'
+import { createModel, listModels, defaultModel } from './model/provider.js'
 import { TerminalApp } from './ui/app.js'
 import { safeText } from './ui/theme.js'
 import { validateMode } from './core/modes.js'
@@ -53,10 +53,10 @@ export function parseOptions (args, env = process.env) {
   const steps = Number(values.steps)
   if (!Number.isInteger(steps) || steps < 1 || steps > 500) throw new Error('--steps must be an integer from 1 to 500')
   if (!['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(values.reasoning)) throw new Error('Invalid --reasoning level')
-  if (env.LOOM_PROVIDER && !['vercel', defaultProvider].includes(env.LOOM_PROVIDER)) throw new Error('Only Vercel AI Gateway is supported; remove LOOM_PROVIDER')
+  if (env.LOOM_PROVIDER) throw new Error('LOOM_PROVIDER is not supported; remove it and configure only the gateway model')
   const model = values.model || env.LOOM_MODEL || defaultModel
   const decisionModel = values['decision-model'] || env.LOOM_DECISION_MODEL || defaultDecisionModel
-  return { ...values, provider: defaultProvider, model, decisionModel, steps, resumeCommand }
+  return { ...values, model, decisionModel, steps, resumeCommand }
 }
 
 // helpText documents both interactive usage and deterministic headless execution.

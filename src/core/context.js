@@ -3,9 +3,6 @@ import { readText } from '../io.js'
 import { taskState } from './task-state.js'
 import { contextBudget } from './context-budget.js'
 
-// estimateTokens remains available to callers while context accounting lives in its own module.
-export { estimateTokens } from './context-budget.js'
-
 // modeInstructions describes each execution mode using the same permissions enforced by the dispatcher.
 const modeInstructions = {
   ask: 'Ask mode includes read, write_file, edit_file, restore_checkpoint, and shell tools. Writes and shell calls trigger an approval dialog in the harness; call the appropriate tool to request approval instead of claiming you cannot write or asking the user to switch modes.',
@@ -39,8 +36,8 @@ Workspace guidance:\n${guidance || '(No root AGENTS.md)'}`
 
 // contextMessages projects the latest successful checkpoint and its retained conversation tail.
 export function contextMessages (session) {
-  const checkpoint = session.latestEvent ? session.latestEvent('context.compacted') : session.events.findLast(event => event.type === 'context.compacted')
-  const messages = checkpoint ? retainedMessageEvents(session.events, checkpoint.through).map(event => event.message) : session.messages || retainedMessageEvents(session.events).map(event => event.message)
+  const checkpoint = session.latestEvent('context.compacted')
+  const messages = checkpoint ? retainedMessageEvents(session.events, checkpoint.through).map(event => event.message) : session.messages
   if (!checkpoint) return messages
   const state = taskState(session, { unfinishedOnly: true })
   const compactedInputs = state ? state.inputs.filter(input => input.seq <= checkpoint.through) : []
@@ -55,7 +52,7 @@ export async function compactContext ({ session, model, system, tools, budget, s
   const messages = contextMessages(session)
   const pressure = contextBudget({ model, system, messages, tools })
   if (!force && pressure.input < pressure.compactAt) return false
-  const checkpoint = session.latestEvent ? session.latestEvent('context.compacted') : session.events.findLast(event => event.type === 'context.compacted')
+  const checkpoint = session.latestEvent('context.compacted')
   const messageEvents = retainedMessageEvents(session.events, checkpoint?.through)
   const keep = compactionBoundary(messageEvents)
   if (!keep) throw new Error('No safe conversation boundary for compaction')
@@ -82,7 +79,7 @@ export async function compactContext ({ session, model, system, tools, budget, s
   const summary = response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
   if (!summary.trim()) throw new Error('Empty compaction; original context preserved')
   const compacted = { type: 'context.compacted', summary, through: keep.seq - 1, at: Date.now(), usage: response.usage, task: state, inputBefore: pressure.input }
-  const projected = contextMessages({ events: [...session.events, compacted] })
+  const projected = contextMessages(contextView([...session.events, compacted]))
   const inputAfter = contextBudget({ model, system, messages: projected, tools }).input
   if (!force && inputAfter >= pressure.input) throw new Error('Compaction did not reduce context; original context preserved')
   await session.append('context.compacted', { ...compacted, inputAfter })
@@ -114,4 +111,15 @@ function compactionBoundary (events) {
     lastAssistant = lastUser || event
   }
   return assistants > 3 ? precedingAssistant : lastUser
+}
+
+// contextView explicitly projects read-only event snapshots onto the session interface required by context functions.
+export function contextView (events) {
+  const messages = []
+  const latest = new Map()
+  for (const event of events) {
+    if (event.message) messages.push(event.message)
+    latest.set(event.type, event)
+  }
+  return { events, messages, latestEvent: type => latest.get(type) }
 }

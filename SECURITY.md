@@ -21,13 +21,14 @@ The optional `.loom/history.sqlite` index is a rebuildable cache, created with r
 
 Shell environments are built from an allowlist and use an isolated temporary home/cache. They do not inherit model credentials, database URLs, SSH agent sockets, or executable startup hooks. Secrets can still exist in ordinary project files; protected filename rules are not a universal secret detector. Sessions, file checkpoints, and tool artifacts under `.loom/` can contain sensitive workspace content. Keep that directory out of version control and inspect logs before sharing them.
 
+## Memory and retention
+
+Explicit project memory is a separate, authoritative `.loom/memory.sqlite` database; it cannot be rebuilt from the history cache and must not be deleted as cache maintenance. Only root agents receive memory tools. Mutations pass through Dispatcher write permissions and preserve immutable revisions with source hashes and optimistic version checks. Sources must be original user inputs or completed, successful non-recall tool results from validated same-workspace journals. This validates provenance, not truth or explicit semantic authorization; the model instruction to remember only on request is not a security boundary.
+
+Memory uses DELETE journals and EXTRA synchronization, fixed operations, disabled SQLite extensions and bounded worker requests. Reads are lazy; database corruption is reported without automatic deletion or repair. Cancellation may stop the worker after commit but before acknowledgment; inspect stored records before retrying. Atomic receipts deduplicate the same session/call identity, not new calls. Archiving retains data; privacy retention must cover the database, revisions, receipts, journals, caches and backups. Current limits bound individual inputs and source scans, not total revision history or disk use. Another local process can still race filesystem checks.
+
 ## Reporting
 
 For a published GitHub repository with private vulnerability reporting enabled, use its **Security → Report a vulnerability** page. Before that channel is available, open an issue asking for a private reporting channel without including exploit details, secrets, or affected private code. No dedicated security inbox is configured yet.
 
 Maintainers should enable GitHub private vulnerability reporting before announcing a public release. No response-time commitment or long-term support policy is established for this early version.
-
-
-Explicit project memory is a separate, authoritative `.loom/memory.sqlite` database; it cannot be rebuilt from the history cache and must not be deleted as cache maintenance. Only root agents receive memory tools. Mutations pass through Dispatcher write permissions and preserve immutable revisions with source hashes and optimistic version checks. Sources must be original user inputs or completed, successful non-recall tool results from validated same-workspace journals. This validates provenance, not truth or explicit semantic authorization; the model instruction to remember only on request is not a security boundary.
-
-Memory uses DELETE journals and EXTRA synchronization, fixed operations, disabled SQLite extensions and bounded worker requests. Reads are lazy; database corruption is reported without automatic deletion or repair. Cancellation may stop the worker after commit but before acknowledgment; inspect stored records before retrying. Atomic receipts deduplicate the same session/call identity, not new calls. Archiving retains data; privacy retention must cover the database, revisions, receipts, journals, caches and backups. Current limits bound individual inputs and source scans, not total revision history or disk use. Another local process can still race filesystem checks.

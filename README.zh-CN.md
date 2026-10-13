@@ -97,7 +97,7 @@ node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --conte
 | `/mode ask\|edit\|auto\|plan` | 直接切换权限模式，标题栏同步显示 |
 | `/exit` | 取消活动执行、等待工具收尾、关闭日志并恢复终端 |
 
-审批弹窗默认选中 **Deny**；上下键选择，Enter 确认，Esc 拒绝。批准仅适用于本次调用，不会隐式批准未来命令。
+审批弹窗默认选中 **Deny**；上下键选择，Enter 确认，Esc 拒绝。**Allow once** 只批准本次调用；**Allow for this session** 批准当前工具在本次运行内的后续调用，例如 shell 的所有后续命令，仍受沙箱约束。不同工具需分别批准；切换 `/mode`（包括重新选择当前模式）或退出会清除授权，恢复旧会话也不会恢复授权。
 
 ## 执行模式
 

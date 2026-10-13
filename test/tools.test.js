@@ -65,6 +65,41 @@ test('shell requires approval even in edit mode and returns bounded output with 
   assert.equal(session.events.find(event => event.type === 'tool.finished').message.toolCallId, 'call-1')
 })
 
+test('session approval covers only that tool and is not restored in another dispatcher or allowed in plan mode', async t => {
+  const { cwd, session } = await fixture(t)
+  const prompts = []
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), approve: async ({ call }) => { prompts.push(call.name); return call.name === 'shell' ? 'session' : false } })
+  const signal = new AbortController().signal
+  for (const id of ['first', 'second']) {
+    const result = await dispatcher.run(call('shell', { command: 'node -e "console.log(123)"' }, id), signal)
+    assert.equal(result.isError, false, result.content[0].text)
+  }
+  assert.deepEqual(prompts, ['shell'])
+  assert.equal((await dispatcher.run(call('write_file', { path: 'denied.txt', content: 'no' }, 'write'), signal)).isError, true)
+  assert.deepEqual(prompts, ['shell', 'write_file'])
+  const decisions = session.events.filter(event => event.type === 'permission.decided')
+  assert.equal(decisions[0].scope, 'session')
+  assert.equal(decisions[0].reused, false)
+  assert.equal(decisions[1].reused, true)
+  dispatcher.mode = 'plan'
+  assert.equal((await dispatcher.run(call('shell', { command: 'true' }, 'plan'), signal)).isError, true)
+  let reopenedPrompts = 0
+  const reopened = new Dispatcher({ session, tools: createTools({ cwd, session }), approve: async () => { reopenedPrompts++; return false } })
+  assert.equal((await reopened.run(call('shell', { command: 'true' }, 'reopened'), signal)).isError, true)
+  assert.equal(reopenedPrompts, 1)
+})
+
+test('a cancelled session approval never installs a remembered grant', async t => {
+  const { cwd, session } = await fixture(t)
+  const controller = new AbortController()
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), approve: async () => { controller.abort(); return 'session' } })
+  const result = await dispatcher.run(call('write_file', { path: 'cancelled.txt', content: 'no' }), controller.signal)
+  assert.equal(result.isError, true)
+  assert.equal(dispatcher.sessionGrants.size, 0)
+  assert.equal(session.events.find(event => event.type === 'permission.decided').allowed, false)
+  await assert.rejects(readFile(path.join(cwd, 'cancelled.txt')), { code: 'ENOENT' })
+})
+
 test('cancellation settles every call in a sequential batch and kills a running shell', async t => {
   const { cwd, session } = await fixture(t)
   const controller = new AbortController()

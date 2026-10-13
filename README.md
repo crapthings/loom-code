@@ -57,6 +57,8 @@ Enter `/mode` or `/permissions` to open the permission selector. Direct commands
 
 **Shell commands require an OS sandbox by default:** Seatbelt on macOS, bubblewrap on Linux. Auto mode skips approval but keeps the sandbox. Shell network access is denied, writes are limited, and isolation failures never fall back to host execution. See [sandbox design and setup](docs/sandbox.md) and [security boundaries](SECURITY.md).
 
+Approval defaults to **Deny**. **Allow once** approves the current call; **Allow for this session** approves subsequent calls to that tool for the current run (all subsequent shell commands for a shell grant), within the selected sandbox. Other tools need separate grants. Choosing `/mode`, even the current mode, clears grants; exiting or reopening a saved session also clears them.
+
 Use `loom --sandbox-status` or `/sandbox` to inspect dependencies. Linux requires `bubblewrap`, `socat`, and `ripgrep` plus host support for unprivileged namespaces. Install project dependencies yourself before running offline coding tasks. `--sandbox off` explicitly selects unsandboxed host execution; it cannot be enabled by a model or `/mode`. Model API traffic is outside the shell sandbox.
 
 Stop or finish active work before changing permissions. Changes update the instructions, tool declarations, dispatcher, and header together, and are recorded in the session. Restarting defaults to `ask`; delegated agents always remain read-only.

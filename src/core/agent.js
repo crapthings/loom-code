@@ -157,6 +157,7 @@ export class Agent {
       await this.session.append('permission.mode', { previous: this.mode, mode })
       this.mode = mode
       this.dispatcher.mode = mode
+      this.dispatcher.sessionGrants.clear()
       this.system = system + this.skillInstructions + this.executionInstructions
       this.emit({ type: 'mode.changed', mode })
     })

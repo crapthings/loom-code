@@ -93,6 +93,7 @@ export class TerminalApp {
       return
     }
     if (event.type === 'mode.changed') this.updateMode(event.mode)
+    if (event.type === 'permission.granted') this.add('Permissions', `${event.tool} 已获本次运行授权，不再逐次询问；切换 /mode 或退出后失效，沙箱边界保持不变。`)
     if (event.type === 'queued') this.queued.set(event.inputId, this.add(`Pending · ${event.delivery}`, event.text))
     if (event.type === 'user') {
       const component = this.queued.get(event.inputId)
@@ -157,7 +158,11 @@ export class TerminalApp {
   approve ({ call, effect, args, signal }) {
     if (signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
-      const choices = new SelectList([{ value: 'deny', label: 'Deny', description: 'Return refusal to the agent' }, { value: 'allow', label: 'Allow once', description: 'Execute this exact call' }], 2, selectTheme, { minPrimaryColumnWidth: 14, maxPrimaryColumnWidth: 14 })
+      const choices = new SelectList([
+        { value: 'deny', label: 'Deny', description: 'Return refusal to the agent' },
+        { value: 'allow', label: 'Allow once', description: 'Execute this exact call' },
+        { value: 'session', label: 'Allow for this session', description: `All ${safeText(call.name)} calls until mode change or exit` }
+      ], 3, selectTheme, { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 24 })
       const title = colors.warning(effect === 'shell' ? `APPROVE SHELL · ${this.agent?.executor.label || this.sandbox}` : 'APPROVE WORKSPACE EDIT')
       const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal })
       const overlay = this.tui.showOverlay(dialog, dialogOptions)
@@ -168,7 +173,7 @@ export class TerminalApp {
         resolve(allowed)
       }
       const abort = () => finish(false)
-      choices.onSelect = item => finish(item.value === 'allow')
+      choices.onSelect = item => finish(item.value === 'session' ? 'session' : item.value === 'allow')
       choices.onCancel = () => finish(false)
       signal.addEventListener('abort', abort, { once: true })
       this.tui.requestRender()

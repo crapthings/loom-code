@@ -74,7 +74,7 @@ test('sandbox denies direct TCP and workspace Unix socket access without contact
 
 test('sandbox dependency and initialization failures never produce an unsandboxed launch', async t => {
   const { cwd } = await fixture(t)
-  const manager = { checkDependencies: () => ({ errors: ['missing isolation'], warnings: [] }) }
+  const manager = { updateConfig: () => {}, reset: async () => {}, checkDependencies: () => ({ errors: ['missing isolation'], warnings: [] }) }
   const executor = new ShellExecutor({ cwd, manager })
   await assert.rejects(executor.prepare('touch escaped', new AbortController().signal), /no host fallback/)
   manager.checkDependencies = () => ({ errors: [], warnings: ['missing socket isolation'] })

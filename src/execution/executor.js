@@ -82,13 +82,10 @@ export class ShellExecutor {
       const cwd = await realpath(this.cwd)
       const policy = { ...sandboxPolicy(cwd, scratch), ...sandboxHelpers() }
       if (policy.seccomp) policy.filesystem.allowRead.push({ path: policy.seccomp.applyPath, literal: true })
-      if (this.manager.updateConfig) {
-        initialized = true
-        this.manager.updateConfig(policy)
-      }
+      initialized = true
+      this.manager.updateConfig(policy)
       const dependencies = this.manager.checkDependencies()
       if (dependencies.errors.length || dependencies.warnings.length) throw new Error(`Sandbox dependencies unavailable or degraded: ${[...dependencies.errors, ...dependencies.warnings].join('; ')}; no host fallback`)
-      initialized = true
       await this.manager.initialize(policy, undefined, false)
       signal.throwIfAborted()
       const prefix = `export TMPDIR='${scratch.replace(/'/g, "'\\''")}'\n`

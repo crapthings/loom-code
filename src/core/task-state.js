@@ -7,8 +7,8 @@ function boundedInput (event) {
 
 // taskState projects recorded task inputs and tool outcomes without inferring correctness from model claims.
 export function taskState (session, { unfinishedOnly = false } = {}) {
-  const completed = session.latestEvent ? session.latestEvent('task.finished') : session.events.findLast(event => event.type === 'task.finished')
-  const delivered = session.latestEvent ? session.latestEvent('inbox.delivered') : session.events.findLast(event => event.type === 'inbox.delivered')
+  const completed = session.latestEvent('task.finished')
+  const delivered = session.latestEvent('inbox.delivered')
   const active = Boolean(delivered && delivered.seq > (completed?.seq ?? -1))
   if (unfinishedOnly && !active) return null
   const from = active ? (completed?.seq ?? -1) + 1 : completed?.from ?? 0

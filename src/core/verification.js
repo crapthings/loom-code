@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { contextMessages } from './context.js'
+import { contextMessages, contextView } from './context.js'
 
 // verificationQuestions asks independent evidence-based questions without authorizing actions or declaring success.
 export const verificationQuestions = {
@@ -30,7 +30,7 @@ function excerpt (text, limit) {
 export function verificationState (session, from) {
   const events = session.events.filter(event => event.seq >= from && (event.message || ['file.checkpoint', 'file.restored'].includes(event.type)))
   const inputs = events.filter(event => event.type === 'inbox.delivered')
-  const previous = contextMessages({ events: session.events.filter(event => event.seq < from) })
+  const previous = contextMessages(contextView(session.events.filter(event => event.seq < from)))
   for (const limit of [2000, 1000, 500, 250, 125]) {
     const state = {
       version: 1,

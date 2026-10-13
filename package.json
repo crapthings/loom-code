@@ -1,7 +1,7 @@
 {
   "name": "loom-code",
   "version": "0.1.0",
-  "description": "A durable JavaScript coding agent with a terminal UI",
+  "description": "Local JavaScript coding agent with a TUI, durable sessions, project memory, sandboxed execution, and Vercel AI Gateway.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -22,14 +22,26 @@
     "LICENSE",
     "NOTICE",
     "docs/architecture.md",
-    "docs/sandbox.md"
+    "docs/sandbox.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "docs/releasing.md",
+    ".env.example",
+    "AGENTS.md"
   ],
   "keywords": [
+    "ai-agent",
     "coding-agent",
     "cli",
     "tui",
-    "agent",
-    "javascript"
+    "javascript",
+    "nodejs",
+    "agent-orchestration",
+    "llm",
+    "vercel-ai-gateway",
+    "sandbox",
+    "developer-tools"
   ],
   "packageManager": "pnpm@12.4.1",
   "bin": {

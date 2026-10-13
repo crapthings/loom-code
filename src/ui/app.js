@@ -180,8 +180,8 @@ export class TerminalApp {
   chooseMode () {
     if (this.agent.running) throw new Error(this.t('mode.busy'))
     return new Promise(resolve => {
-      const choices = new SelectList(Object.keys(modes).map(value => ({ value, label: `${value} · ${this.t(`mode.${value}.label`)}`, description: this.t(`mode.${value}.description`) })), 4, selectTheme)
-      choices.setSelectedIndex(Object.keys(modes).indexOf(this.agent.mode))
+      const choices = new SelectList(modes.map(value => ({ value, label: `${value} · ${this.t(`mode.${value}.label`)}`, description: this.t(`mode.${value}.description`) })), 4, selectTheme)
+      choices.setSelectedIndex(modes.indexOf(this.agent.mode))
       const dialog = new SelectionDialog({ title: colors.warning(this.t('mode.title', { mode: this.agent.mode })), preview: this.t('mode.preview', { boundary: this.executionLabel() }), choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
       const overlay = this.showDialog('mode', dialog)
       const finish = mode => { overlay.hide(); this.modeMenuCancel = null; this.tui.requestRender(); resolve(mode) }

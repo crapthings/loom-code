@@ -1,21 +1,17 @@
 import { defaultProvider, gatewayModels } from './catalog.js'
 import { setTimeout as delay } from 'node:timers/promises'
 
-// defaultProvider identifies the only supported production gateway.
-export { defaultProvider }
-
 // defaultModel selects the initial model served through Vercel AI Gateway.
 export const defaultModel = 'deepseek/deepseek-v4.1-flash'
 
 // createModel wraps Vercel's Pi streams in the harness's small completion interface.
-export function createModel ({ provider = defaultProvider, model: id = defaultModel, reasoning = 'off', collection } = {}) {
-  if (!['vercel', defaultProvider].includes(provider)) throw new Error('Only Vercel AI Gateway is supported')
-  provider = defaultProvider
+export function createModel ({ provider, model: id = defaultModel, reasoning = 'off', collection } = {}) {
+  if (provider !== undefined) throw new Error('Provider selection is not supported; Vercel AI Gateway is fixed')
   const models = collection || gatewayModels()
-  const model = models.getModel(provider, id)
-  if (!model) throw new Error(`Unknown model ${provider}/${id}; use --models to inspect the catalog`)
+  const model = models.getModel(defaultProvider, id)
+  if (!model) throw new Error(`Unknown model ${defaultProvider}/${id}; use --models to inspect the catalog`)
   return {
-    label: `${provider}/${id}`,
+    label: `${defaultProvider}/${id}`,
     contextWindow: model.contextWindow,
     maxOutputTokens: model.maxTokens,
     complete: async ({ system, messages, tools }, { signal, maxTokens, onDelta, onRetry = () => {} }) => {

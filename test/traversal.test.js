@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Session } from '../src/core/session.js'
-import { contextMessages, compactContext } from '../src/core/context.js'
+import { contextMessages, contextView, compactContext } from '../src/core/context.js'
 import { taskState } from '../src/core/task-state.js'
 import { contextBudget, estimateTokens } from '../src/core/context-budget.js'
 import { Budget } from '../src/core/budget.js'
@@ -116,4 +116,14 @@ test('reused prompt byte counts preserve complete-envelope estimates and seriali
   assert.equal(budget.components.messages, estimateTokens(messages))
   assert.equal(budget.components.tools, estimateTokens(tools))
   assert.equal(contextBudget({ model: { contextWindow: 32000 } }).input, estimateTokens({ system: '', messages: [], tools: [] }))
+})
+
+test('explicit context snapshots preserve unfinished requirements without adapting incomplete session objects', () => {
+  const events = [
+    { seq: 0, type: 'inbox.delivered', inputId: 'original', message: { role: 'user', content: 'Keep the API' } },
+    { seq: 1, type: 'context.compacted', through: 0, summary: 'Work in progress', at: 1 },
+    { seq: 2, type: 'message', message: response('Inspecting') }
+  ]
+  assert.match(contextMessages(contextView(events))[0].content, /Keep the API/)
+  assert.throws(() => contextMessages({ events }), /latestEvent/)
 })

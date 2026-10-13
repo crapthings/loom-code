@@ -33,6 +33,9 @@ test('UI projections copy budget counters and ignore delegated events and unknow
   const before = store.getState()
   store.dispatch({ type: 'mode.changed', mode: 'auto', child: 'child' })
   store.dispatch({ type: 'unknown' })
+  store.dispatch({ type: 'toString' })
+  store.dispatch({ type: 'constructor' })
+  store.dispatch({ type: '__proto__' })
   assert.equal(store.getState(), before)
 })
 

@@ -73,6 +73,7 @@ export const en = {
   'dialog.truncated': '… Argument preview truncated',
   'context.compacted': 'Compaction complete; original history is preserved.',
   'session.details': 'ID: {id}\nLog: {log}\nPending: {pending}\nStatus: {status}',
+  'command.arguments': 'Invalid arguments for /{command}; use /help',
   'command.unknown': 'Unknown command; use /help',
   'command.help': 'Show controls and commands',
   'command.mode': 'Switch ask / edit / auto / plan permissions',

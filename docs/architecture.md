@@ -32,6 +32,12 @@ Agent 继续拥有执行生命周期，Dispatcher 继续拥有授权，Session �
 
 当前选择 [Zustand vanilla](https://github.com/pmndrs/zustand#using-zustand-without-react)，因为所需的是简单可订阅的界面数据，且可用稳定接口封装依赖。[XState Store](https://stately.ai/docs/xstate-store) 的事件与纯转换也适合这一层；[XState actors](https://stately.ai/docs/actors) 适合以后明确表达执行状态转换和子任务生命周期，届时仍需保留日志提交、取消结算和未知副作用恢复约束。[MobX](https://mobx.js.org/observable-state.html) 更适合观察大量类对象；[Redux](https://redux.js.org/introduction/getting-started) 的 reducer/action 结构适合更多客户端共享事件协议。暂不同时引入多个库。
 
+## 分发与顺序流程
+
+`src/ui/commands.js` 集中声明斜杠命令的名称、别名、参数规则和执行回调；帮助、补全与执行使用同一份注册表。应用只注入命令需要的动作，注册表不持有终端、工具或会话对象。普通文本直接入队，未知命令和错误参数在执行前拒绝。
+
+`src/ui/transitions.js` 按事件名称组织纯状态转换；`uiTransition` 先检查关闭状态和子代理边界，再检查自有事件键并执行一个转换。流式文本、队列和弹窗转换保留各自的前置检查与不可变快照。事件处理表适用于互斥的行为选择，early return 适用于前置条件；工具验证、授权、意图提交、执行和结果结算继续使用显式顺序流程。
+
 ## 参考实现到我们的机制
 
 | 来源 | 查看位置 | 吸收的机制 | 当前实现 |

@@ -73,6 +73,7 @@ export const zhCN = {
   'dialog.truncated': '… 参数预览已截断',
   'context.compacted': '压缩完成，原始历史已保留。',
   'session.details': '编号：{id}\n日志：{log}\n待处理：{pending}\n状态：{status}',
+  'command.arguments': '/{command} 的参数不正确；请查看 /help',
   'command.unknown': '未知命令；使用 /help 查看帮助',
   'command.help': '查看操作说明和命令',
   'command.mode': '切换 ask / edit / auto / plan 权限',

@@ -155,6 +155,38 @@ test('untrusted terminal escape sequences cannot become UI control codes', () =>
   assert.equal(safeText('\x1b[2Jhello\x1b]52;c;secret\x07\n世界'), 'hello\n世界')
 })
 
+test('slash command registry keeps help and aliases aligned and validates arguments before effects', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal() })
+  app.bind(agent)
+  t.after(() => app.tui.stop())
+  const inputs = []
+  let stops = 0
+  agent.enqueue = async (text, delivery) => inputs.push({ text, delivery })
+  agent.interrupt = () => stops++
+  await app.submit('/queue\tfirst line\nsecond line')
+  await app.submit(' ordinary task ')
+  assert.deepEqual(inputs, [{ text: 'first line\nsecond line', delivery: 'queue' }, { text: 'ordinary task', delivery: undefined }])
+  await assert.rejects(app.submit('/queue'), /Invalid arguments/)
+  await assert.rejects(app.submit('/stop unwanted'), /Invalid arguments/)
+  for (const name of ['missing', 'toString', 'constructor', '__proto__']) {
+    await assert.rejects(app.submit(`/${name}`), /Unknown command/)
+  }
+  assert.equal(stops, 0)
+  assert.equal(inputs.length, 2)
+  await app.submit('/stop')
+  assert.equal(stops, 1)
+  await app.submit('/help')
+  const help = app.transcript.render(120).join('\n')
+  for (const command of app.commandList()) assert.ok(help.includes(`/${command.name} —`))
+  await app.submit('/permissions plan')
+  assert.equal(agent.mode, 'plan')
+  await app.submit('/lang zh-CN')
+  assert.equal(app.language, 'zh-CN')
+  await assert.rejects(app.submit('/stop unwanted'), /参数不正确/)
+  assert.equal(model.requests.length, 0)
+})
+
 test('startup session picker excludes busy sessions and restores terminal on selection and cancellation', async () => {
   const terminal = new FakeTerminal()
   const sessions = Array.from({ length: 12 }, (_, i) => ({ id: `session-${i}`, title: `Task ${i}`, updated: Date.now(), status: 'completed', pending: 0, busy: i === 0 }))

@@ -1,15 +1,25 @@
-import { builtinModels } from '@earendil-works/pi-ai/providers/all'
+import { createModels } from '@earendil-works/pi-ai'
+import { vercelAIGatewayProvider } from '@earendil-works/pi-ai/providers/vercel-ai-gateway'
 import { setTimeout as delay } from 'node:timers/promises'
 
-// defaultProvider selects Vercel AI Gateway unless a caller explicitly chooses another provider.
+// defaultProvider identifies the only supported production gateway.
 export const defaultProvider = 'vercel-ai-gateway'
 
-// defaultModels supplies known model identifiers for providers that support an implicit selection.
-export const defaultModels = { 'vercel-ai-gateway': 'deepseek/deepseek-v4.1-flash', anthropic: 'claude-sonnet-4-6', openai: 'gpt-5.4' }
+// defaultModel selects the initial model served through Vercel AI Gateway.
+export const defaultModel = 'deepseek/deepseek-v4.1-flash'
 
-// createModel wraps Pi's multi-provider streams in the harness's small completion interface.
-export function createModel ({ provider = defaultProvider, model: id = defaultModels[provider], reasoning = 'off', collection } = {}) {
-  const models = collection || builtinModels()
+// gatewayModels registers only the Vercel provider and its bundled catalog.
+function gatewayModels () {
+  const models = createModels()
+  models.setProvider(vercelAIGatewayProvider())
+  return models
+}
+
+// createModel wraps Vercel's Pi streams in the harness's small completion interface.
+export function createModel ({ provider = defaultProvider, model: id = defaultModel, reasoning = 'off', collection } = {}) {
+  if (!['vercel', defaultProvider].includes(provider)) throw new Error('Only Vercel AI Gateway is supported')
+  provider = defaultProvider
+  const models = collection || gatewayModels()
   const model = models.getModel(provider, id)
   if (!model) throw new Error(`Unknown model ${provider}/${id}; use --models to inspect the catalog`)
   return {
@@ -33,6 +43,6 @@ export function createModel ({ provider = defaultProvider, model: id = defaultMo
 }
 
 // listModels returns built-in chat identifiers without accessing credentials or making paid requests.
-export function listModels (provider) {
-  return builtinModels().getModels(provider).map(model => `${model.provider}/${model.id}`)
+export function listModels () {
+  return gatewayModels().getModels(defaultProvider).map(model => `${model.provider}/${model.id}`)
 }

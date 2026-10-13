@@ -34,7 +34,7 @@ cd /path/to/project
 loom
 ```
 
-The default route is **Vercel AI Gateway**, with model **`deepseek/deepseek-v4.1-flash`**. The current directory becomes the workspace. The built-in Pi adapter uses Vercel's Anthropic Messages-compatible API; no `--base-url` is required. See the [Vercel model documentation](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash).
+The default route is **Vercel AI Gateway**, with model **`deepseek/deepseek-v4.1-flash`**. The current directory becomes the workspace. The built-in Pi adapter uses Vercel's Anthropic Messages-compatible API; requests use the fixed Vercel gateway endpoint. See the [Vercel model documentation](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash).
 
 For an offline demo with real file inspection but a deterministic model:
 
@@ -82,33 +82,35 @@ The interface defaults to English. Language choices are saved atomically in `~/.
 
 Approval dialogs default to **Deny**. Use arrow keys and Enter to select, or Esc to cancel.
 
-## Other models and endpoints
+## Gateway models
 
 ```sh
 loom --model openai/gpt-5.4
-loom --models --provider vercel
-
-# Direct provider credentials: ANTHROPIC_API_KEY / OPENAI_API_KEY
-loom --provider anthropic --model claude-sonnet-4-6
-loom --provider openai --model gpt-5.4
-
-# OpenAI-compatible endpoint; authentication uses LOOM_API_KEY if set
-loom --base-url http://localhost:11434/v1 --model YOUR_MODEL --context-window 32768
+loom --models
 ```
 
-`--provider` / `LOOM_PROVIDER` and `--model` / `LOOM_MODEL` override defaults. `vercel` aliases `vercel-ai-gateway`. Setting `OPENAI_API_KEY` alone does not change the default route. Custom endpoints require an explicit model and do not receive other provider keys automatically. Select a model that supports tools.
+Vercel AI Gateway is the only supported production route. `--model` / `LOOM_MODEL` selects a model on that gateway; authentication uses `AI_GATEWAY_API_KEY`. Direct providers and custom endpoint flags are unavailable. Select a model that supports tools.
 
-Model metadata and cost estimates come from the pinned Pi catalog and can differ from current gateway limits or billing. Custom endpoints have no price metadata. `.env.example` documents variables; Loom does **not** automatically load `.env` files.
+Model metadata and cost estimates come from the pinned Pi catalog and can differ from current gateway limits or billing. `.env.example` documents variables; Loom does **not** automatically load `.env` files.
 
 ## Sessions, tools, and delegation
 
 Sessions live in `WORKSPACE/.loom/sessions/SESSION_ID/`. Add `.loom/` to the target project's `.gitignore`: logs and checkpoints can contain source code, user input, and tool results.
 
 ```sh
-loom --session SESSION_ID
+loom resume                   # Pick a session in the current workspace
+loom resume --last            # Open the most recent session that is not busy
+loom resume SESSION_ID        # Open a specific existing root session
+loom resume --list            # List without opening a writer or requiring API credentials
+loom resume --list --json     # Machine-readable catalog
+loom --session SESSION_ID     # Original explicit session option
 ```
 
-Reopening loads history without continuing automatically. After a crash, started calls without outcomes are marked unknown and block further execution until inspected and explicitly resumed. Loom never automatically replays those effects and does not promise exactly-once execution.
+The picker shows the first task, update time, execution state, and pending input count. Sessions in other projects and child-agent sessions are excluded. Busy sessions remain visible in text/JSON lists but cannot be selected. Esc or Ctrl+C cancels the picker without creating a session. Non-terminal `loom resume` prints the list; automated execution must specify an ID or `--last`, plus `--resume` or `--print`.
+
+Listing does not repair torn logs or reclaim stale locks; those are handled only when opening a selected session. Unreadable, malformed, or oversized logs (over 16 MiB) are skipped with a count. Listing currently scans local logs; large histories will need an incremental index. Opening uses the current model configuration and defaults to `ask`, without restoring session approval grants.
+
+Reopening loads history without continuing automatically. `/continue` starts work only when a task was interrupted or failed, tool outcomes require recovery, or saved inputs remain; fresh and completed sessions display a notice without calling the model. Unfinished work resumes before queued tasks, using recorded tool results rather than replaying calls. A model may still request a repeated operation, so this is not an exactly-once guarantee. After a crash, started calls without outcomes are marked unknown and block further execution until inspected and explicitly resumed. Loom never automatically replays those effects and does not promise exactly-once execution.
 
 File tools support reading, listing, literal search, hash-checked writes and edits, and reversible checkpoints. Shell output is bounded, with stored artifacts for longer output. Research/review subagents use separate sessions and read-only tools, sharing cancellation and the run budget. Root `AGENTS.md` and `.agents/skills/NAME/SKILL.md` provide project guidance and lazy skill instructions.
 

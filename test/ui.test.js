@@ -6,6 +6,7 @@ import { safeText } from '../src/ui/theme.js'
 import { parseOptions } from '../src/cli.js'
 import { catalogs, translate } from '../src/ui/i18n.js'
 import { LanguagePreferences } from '../src/ui/preferences.js'
+import { selectSession } from '../src/ui/session-picker.js'
 import path from 'node:path'
 import { agentFixture, call, deferred, fixture, response } from './helpers.js'
 
@@ -154,6 +155,62 @@ test('untrusted terminal escape sequences cannot become UI control codes', () =>
   assert.equal(safeText('\x1b[2Jhello\x1b]52;c;secret\x07\n世界'), 'hello\n世界')
 })
 
+test('startup session picker excludes busy sessions and restores terminal on selection and cancellation', async () => {
+  const terminal = new FakeTerminal()
+  const sessions = Array.from({ length: 12 }, (_, i) => ({ id: `session-${i}`, title: `Task ${i}`, updated: Date.now(), status: 'completed', pending: 0, busy: i === 0 }))
+  const selected = selectSession(sessions, { language: 'zh-CN', terminal })
+  await delay(40)
+  assert.match(safeText(terminal.output), /打开历史会话/)
+  terminal.columns = 35
+  terminal.rows = 12
+  terminal.resize()
+  await delay(40)
+  terminal.input('\r')
+  assert.equal(await selected, 'session-1')
+  assert.equal(terminal.stopped, true)
+  const cancelled = selectSession(sessions, { terminal })
+  terminal.input('\x1b')
+  assert.equal(await cancelled, undefined)
+  const interrupted = selectSession(sessions, { terminal })
+  terminal.input('\x03')
+  assert.equal(await interrupted, undefined)
+  assert.equal(await selectSession(sessions.map(session => ({ ...session, busy: true })), { terminal }), undefined)
+})
+
+test('continue explains empty recovery in the selected UI language without calling the model', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', language: 'zh-CN', terminal: new FakeTerminal() })
+  app.bind(agent)
+  agent.emit = event => app.event(event)
+  t.after(() => app.tui.stop())
+  await app.submit('/continue')
+  assert.match(app.transcript.render(80).join('\n'), /没有待恢复的任务/)
+  assert.equal(model.requests.length, 0)
+  assert.equal(session.pending.length, 0)
+})
+
+test('shutdown prevents delayed language saves, engine events, and queued commands from reviving the UI', async t => {
+  const { cwd, session, model, agent } = await agentFixture(t, [])
+  const saving = deferred()
+  const app = new TerminalApp({ cwd, session, model, mode: 'ask', terminal: new FakeTerminal(), saveLanguage: () => saving.promise })
+  app.bind(agent)
+  const switching = app.submit('/language zh-CN')
+  await app.shutdown()
+  const closed = app.store.getState()
+  const transcript = app.transcript.render(80)
+  saving.resolve()
+  await switching
+  app.event({ type: 'assistant.start', stepId: 'late' })
+  app.event({ type: 'queued', inputId: 'late', text: 'late task' })
+  await app.submit('late task')
+  assert.equal(await app.approve({ signal: new AbortController().signal }), false)
+  assert.equal(app.store.getState(), closed)
+  assert.deepEqual(app.transcript.render(80), transcript)
+  assert.equal(app.language, 'en')
+  assert.equal(app.streamComponents.size, 0)
+  assert.equal(session.pending.length, 0)
+})
+
 test('language commands persist preferences and refresh live controls without changing permissions or conversation content', async t => {
   const { cwd, session, model, agent } = await agentFixture(t, [])
   const preferences = new LanguagePreferences(path.join(cwd, 'user-settings', 'settings.json'))
@@ -245,10 +302,10 @@ test('slash permission commands update the runtime, prompt, tools, and header to
   assert.equal(app.tui.hasOverlay(), false)
 })
 
-test('CLI validates budgets, modes, and non-default providers', () => {
+test('CLI validates budgets, modes, and rejects provider selection', () => {
   assert.throws(() => parseOptions(['--steps', 'NaN']), /integer/)
   assert.throws(() => parseOptions(['--mode', 'unsafe']), /mode/)
-  assert.throws(() => parseOptions(['--provider', 'google']), /Specify --model/)
+  assert.throws(() => parseOptions(['--provider', 'google']), /Unknown option/)
   assert.equal(parseOptions(['--demo', '--mode', 'plan']).demo, true)
   assert.equal(parseOptions(['--mode', 'auto']).sandbox, 'required')
   assert.equal(parseOptions(['--sandbox', 'off']).sandbox, 'off')

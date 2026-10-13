@@ -11,13 +11,22 @@ function budgetSnapshot (budget, previous) {
 
 // uiTransition projects engine events and local UI actions into immutable display state without executing effects.
 export function uiTransition (state, event) {
-  if (event.child) return state
-  if (event.type === 'ui.language') return { ...state, language: validateLanguage(event.language) }
-  if (event.type === 'mode.changed') return { ...state, mode: validateMode(event.mode) }
-  if (event.type === 'ui.closing') return { ...state, closing: true }
-  if (event.type === 'ui.closed') return { ...state, streams: new Map(), queued: new Map(), dialogs: [] }
+  if (state.closed || event.child) return state
+  if (event.type === 'ui.language') {
+    const language = validateLanguage(event.language)
+    return language === state.language ? state : { ...state, language }
+  }
+  if (event.type === 'mode.changed') {
+    const mode = validateMode(event.mode)
+    return mode === state.mode ? state : { ...state, mode }
+  }
+  if (event.type === 'ui.closing') return state.closing ? state : { ...state, closing: true }
+  if (event.type === 'ui.closed') return { ...state, closing: true, closed: true, streams: new Map(), queued: new Map(), dialogs: [] }
   if (event.type === 'ui.dialog.opened') return { ...state, dialogs: [...state.dialogs, { ...event.dialog }] }
-  if (event.type === 'ui.dialog.closed') return { ...state, dialogs: state.dialogs.filter(dialog => dialog.id !== event.id) }
+  if (event.type === 'ui.dialog.closed') {
+    const dialogs = state.dialogs.filter(dialog => dialog.id !== event.id)
+    return dialogs.length === state.dialogs.length ? state : { ...state, dialogs }
+  }
   if (event.type === 'ui.status' || event.type === 'status' || event.type === 'tool.progress') {
     const status = event.type === 'ui.status' ? event.status : event.kind === 'process.started' ? { kind: event.kind, boundary: event.boundary, pid: event.pid } : event.text
     const budget = budgetSnapshot(event.budget, state.budget)
@@ -47,6 +56,6 @@ export function uiTransition (state, event) {
 
 // createUiStore creates one app's ephemeral view state with event-only writes and disposable subscriptions.
 export function createUiStore ({ language = 'en', mode = 'ask' } = {}) {
-  const store = createStore(() => ({ language: validateLanguage(language), mode: validateMode(mode), status: 'idle', budget: { calls: 0, tokens: 0, cost: 0 }, streams: new Map(), queued: new Map(), dialogs: [], closing: false }))
+  const store = createStore(() => ({ language: validateLanguage(language), mode: validateMode(mode), status: 'idle', budget: { calls: 0, tokens: 0, cost: 0 }, streams: new Map(), queued: new Map(), dialogs: [], closing: false, closed: false }))
   return { getState: store.getState, subscribe: store.subscribe, dispatch: event => store.setState(state => uiTransition(state, event), true) }
 }

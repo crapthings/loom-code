@@ -128,6 +128,7 @@ export class Agent {
     signal.addEventListener('abort', abort, { once: true })
     try {
       signal.throwIfAborted()
+      await session.append('session.parent', { parentId: this.session.id, role })
       await this.session.append('agent.spawned', { childId: session.id, role, task })
       await child.initialize()
       child.system += `\nYour role is ${role}; return concise findings with file references and evidence. Do not modify files.`
@@ -164,11 +165,25 @@ export class Agent {
   }
 
   async resume () {
-    if (this.running) return
+    if (this.closed) throw new Error('Agent has closed')
+    if (this.resuming) return this.resuming
+    if (this.running) return false
+    this.resuming = this.resumeWork()
+    try { return await this.resuming } finally { this.resuming = null }
+  }
+
+  async resumeWork () {
+    const unfinished = this.session.unfinished || this.blocked
+    if (!unfinished && !this.session.pending.length) {
+      this.emit({ type: 'resume.skipped', text: 'No unfinished task to resume. Submit a new task to start work.' })
+      return false
+    }
     if (this.blocked) await this.session.append('recovery.acknowledged')
     this.blocked = false
-    if (!this.session.pending.length) await this.session.append('inbox.enqueued', { inputId: randomUUID(), delivery: 'steer', text: 'Continue the original task from recorded evidence; inspect unknown or partial outcomes before retrying.' })
+    if (unfinished) await this.session.append('inbox.enqueued', { inputId: randomUUID(), delivery: 'steer', text: 'Continue only the unfinished original task from recorded evidence. Keep completed work; do not repeat successful tool calls. Inspect the workspace and unknown or partial outcomes before deciding whether any retry is necessary.' })
+    if (this.closed) return false
     this.wake()
+    return true
   }
 
   async compact () {
@@ -215,6 +230,7 @@ export class Agent {
   async close () {
     this.closed = true
     this.interrupt()
+    await this.resuming
     await this.wait()
     await this.session.close()
   }

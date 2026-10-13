@@ -12,7 +12,7 @@ export function createDemoModel () {
         return demoResponse([{ type: 'text', text: '我先查看工作区文件，确认实际目录结构。' }, { type: 'toolCall', id: randomUUID(), name: 'list_files', arguments: { path: '.' } }], 'toolUse')
       }
       const output = messages.findLast(message => message.role === 'toolResult')?.content?.[0]?.text || 'No tool output'
-      const text = `已完成一次真实的文件工具调用。\n\n工作区结果：\n\n\`\`\`text\n${output.slice(0, 1500)}\n\`\`\`\n\n这是离线演示模型；真实编码请指定 --provider 和 --model。\n会话日志、审批、取消、输入排队与上下文机制均由实际编排核心处理。`
+      const text = `已完成一次真实的文件工具调用。\n\n工作区结果：\n\n\`\`\`text\n${output.slice(0, 1500)}\n\`\`\`\n\n这是离线演示模型；真实编码请设置 AI_GATEWAY_API_KEY，可通过 --model 选择模型。\n会话日志、审批、取消、输入排队与上下文机制均由实际编排核心处理。`
       for (const word of text.match(/.{1,12}/gs) || []) {
         await delay(8, undefined, { signal })
         onDelta(word)

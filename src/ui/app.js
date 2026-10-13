@@ -100,6 +100,7 @@ export class TerminalApp {
       if (message.role === 'toolResult') this.add(message.toolName, message.content[0]?.text || '')
     }
     if (this.agent.blocked) this.add(this.t('label.recovery'), this.t('recovery.instructions'))
+    else if (this.session.unfinished) this.add(this.t('label.pending'), this.t('resume.available'))
     if (this.session.pending.length) this.add(this.t('label.pending'), this.t('pending.count', { count: this.session.pending.length }))
     this.tui.start()
   }
@@ -112,14 +113,16 @@ export class TerminalApp {
   }
 
   event (event) {
+    if (this.store.getState().closed) return
     if (event.child) {
       if (event.type === 'user') this.add(`${event.role} · ${event.child.slice(0, 8)}`, event.text)
       if (event.type === 'tool.start') this.add(this.t('child.tool', { role: event.role }), event.call.name)
       if (event.type === 'error') this.add(this.t('child.error', { role: event.role }), event.text)
       return
     }
-    if (event.type === 'mode.changed') this.updateMode(event.mode)
+    if (event.type === 'mode.changed') { this.updateMode(event.mode); return }
     if (event.type === 'permission.granted') this.add(this.t('label.permissions'), this.t('grant.notice', { tool: event.tool }))
+    if (event.type === 'resume.skipped') this.add(this.t('label.session'), this.t('resume.empty'))
     if (event.type === 'queued') this.queuedComponents.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
     if (event.type === 'user') {
       const component = this.queuedComponents.get(event.inputId)
@@ -197,12 +200,13 @@ export class TerminalApp {
     if (!language || this.closing) return
     if (!Object.hasOwn(catalogs, language)) throw new Error(this.t('language.invalid'))
     await this.saveLanguage(language)
+    if (this.closing) return
     this.store.dispatch({ type: 'ui.language', language })
     this.add(this.t('label.language'), this.t('language.changed', { language: this.t(`language.${language}`) }))
   }
 
   approve ({ call, effect, args, signal }) {
-    if (signal.aborted) return Promise.resolve(false)
+    if (this.closing || signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
       const choices = new SelectList([
         { value: 'deny', label: this.t('approval.deny'), description: this.t('approval.deny.description') },
@@ -242,6 +246,7 @@ export class TerminalApp {
   }
 
   async submit (input) {
+    if (this.closing) return
     const text = input.trim()
     if (!text) return
     if (/^\/(mode|permissions)(\s|$)/.test(text)) return this.switchMode(text.split(/\s+/).slice(1).join(' '))

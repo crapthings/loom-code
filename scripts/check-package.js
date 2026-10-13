@@ -46,6 +46,10 @@ async function checkPackage () {
     const events = run(process.execPath, [entry, '--demo', '--print', 'Inspect the workspace', '--json'], workspace).trim().split('\n').map(line => JSON.parse(line))
     assert.ok(events.some(event => event.type === 'tool.end' && !event.result.isError && event.result.text.includes('example.txt')))
     assert.ok(events.some(event => event.type === 'status' && event.text === 'idle'))
+    const catalog = JSON.parse(run(process.execPath, [entry, 'resume', '--list', '--json'], workspace))
+    assert.equal(catalog.sessions.length, 1)
+    assert.equal(catalog.sessions[0].status, 'completed')
+    assert.equal(catalog.sessions[0].busy, false)
     run(process.execPath, ['--input-type=module', '-e', 'const api = await import(process.argv[1]); if (!api.Agent || !api.Session || !api.Dispatcher) process.exit(1)', path.join(packed, 'src/index.js')], workspace)
     process.stdout.write(`Package smoke check passed (${files.length} files; offline CLI and SDK exports).\n`)
   } finally {

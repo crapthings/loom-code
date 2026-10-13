@@ -43,7 +43,7 @@ loom
 
 `loom` 默认以当前目录作为工作区，无需在每个目标项目安装依赖。上述全局安装链接到本地源码，修改源码后下次启动即可生效；新增依赖后在源码目录运行 `pnpm install --ignore-scripts`。保留源码目录及其依赖，移动目录后重新注册命令。卸载使用 `pnpm remove --global loom-code`。
 
-默认使用 Vercel AI Gateway，模型为 `deepseek/deepseek-v4.1-flash`，认证读取 `AI_GATEWAY_API_KEY`。内置适配器使用 Anthropic Messages 兼容协议并保留模型的上下文、推理和价格信息；无需传 `--base-url`。模型 ID 参考 [Vercel 模型文档](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash)。可在 shell 配置中设置密钥，后续进入任意项目执行 `loom` 即可。上下文、输出限制和费用估算来自锁定版本的 Pi 模型目录，可能与网关最新信息不同，实际计费以网关账单为准。
+默认使用 Vercel AI Gateway，模型为 `deepseek/deepseek-v4.1-flash`，认证读取 `AI_GATEWAY_API_KEY`。内置适配器使用 Anthropic Messages 兼容协议并保留模型的上下文、推理和价格信息；请求使用固定的 Vercel 网关地址。模型 ID 参考 [Vercel 模型文档](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash)。可在 shell 配置中设置密钥，后续进入任意项目执行 `loom` 即可。上下文、输出限制和费用估算来自锁定版本的 Pi 模型目录，可能与网关最新信息不同，实际计费以网关账单为准。
 
 ```sh
 export AI_GATEWAY_API_KEY='YOUR_GATEWAY_KEY'
@@ -53,29 +53,27 @@ loom
 loom --model openai/gpt-5.4
 
 # 查看 Vercel 模型目录
-loom --models --provider vercel
+loom --models
 ```
 
-`--provider` 或 `LOOM_PROVIDER` 可覆盖默认网关（`vercel` 是 `vercel-ai-gateway` 的别名），`--model` 或 `LOOM_MODEL` 可覆盖默认模型。仅设置 `OPENAI_API_KEY` 不会自动切换供应商。缺少 Vercel 密钥时会在启动 TUI 前提示，不会自动调用其他供应商。
+当前只支持 Vercel AI Gateway；`--model` 或 `LOOM_MODEL` 选择网关中的模型，认证只读取 `AI_GATEWAY_API_KEY`。不再提供直连供应商和自定义端点参数。必须选择支持工具调用的模型。缺少 Vercel 密钥时会在启动 TUI 前提示。
 
-其他供应商与自定义端点：先在自己的终端设置对应密钥，再显式启动对应模型。
+
+历史会话入口：
 
 ```sh
-# 从环境变量 ANTHROPIC_API_KEY 读取认证
-node bin/loom.js --provider anthropic --model claude-sonnet-4-6 --cwd /path/to/project
-
-# 从环境变量 OPENAI_API_KEY 读取认证
-node bin/loom.js --provider openai --model gpt-5.4 --cwd /path/to/project
-
-# 查看锁定版本 Pi 提供的模型目录
-node bin/loom.js --models
-node bin/loom.js --models --provider google
-
-# Ollama / LM Studio 等支持工具调用的 OpenAI-compatible 服务
-node bin/loom.js --base-url http://localhost:11434/v1 --model YOUR_MODEL --context-window 32768
+loom resume                  # 当前项目的 TUI 会话选择器
+loom resume --last           # 打开最近的未占用会话
+loom resume SESSION_ID       # 打开指定的已有主会话
+loom resume --list           # 只读列表，无需 API 密钥
+loom resume --list --json    # 输出 JSON
 ```
 
-自定义端点只读取 `LOOM_API_KEY`，不会把其他供应商的密钥自动发送给它；无密钥的本地端点也可使用。必须选择支持工具调用的模型。自定义端点没有价格信息，界面显示的费用不代表实际账单。
+列表展示首个任务、更新时间、状态与待处理条数，排除其他项目和子代理会话。占用中的会话会在文本/JSON 列表中标记，但不能选择。Esc / Ctrl+C 取消选择，不创建新会话。非交互终端中 `loom resume` 输出列表；自动执行需指定 ID 或 `--last`，再传 `--resume` 或 `--print`。
+
+列出时不修复日志、不删除旧锁；真正打开时才获取独占锁和恢复日志。损坏、不可读或超过 16 MiB 的日志跳过并报告数量。当前逐个扫描日志，大规模历史后续需增量索引。打开使用当前模型配置，默认 `ask`，不会恢复本次会话授权。
+
+恢复说明：`loom --session SESSION_ID` 加载旧会话但不自动执行。`/continue` 只恢复中断、失败、待确认的未知结果或持久化待处理输入；新会话和已完成任务仅显示提示，不调用模型。未完成任务优先于排队任务，恢复请求保留已有工具结果并要求避免重复成功操作，但不能保证模型不会再次请求相同操作。
 
 ## 操作
 
@@ -174,7 +172,7 @@ pnpm run check
 pnpm run check:package
 ```
 
-检查包含 Standard Style、顶层声明的一行解释，以及无网络付费调用的行为测试。真实供应商 HTTP 行为没有用付费密钥验收；供应商适配通过 Pi 的 faux provider 验证，OpenAI-compatible HTTP 接口通过本地测试服务验证。
+检查包含 Standard Style、顶层声明的一行解释，以及无网络付费调用的行为测试。真实供应商 HTTP 行为没有用付费密钥验收；供应商适配通过 Pi 的 faux provider 验证，流式传输与工具调用协议通过注入本地 HTTP 测试服务验证，不代表真实 Vercel 网关验收。
 
 源码借鉴与实现边界见 [architecture.md](docs/architecture.md)。当前重点是可靠的本地编码闭环；MCP 客户端、OAuth 持久认证、可执行插件、分布式协调、容器执行器和沙箱网络放行尚未实现。
 

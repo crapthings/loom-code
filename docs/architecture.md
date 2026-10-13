@@ -10,7 +10,7 @@ TerminalApp / headless JSON / SDK
        ▼
 Agent: 单会话协调、step、预算、取消、委托
        ├── Context: 指令、skill 索引、模型视图、压缩
-       ├── Model: Vercel AI Gateway 或离线模型
+       ├── Model: Vercel AI Gateway
        └── Dispatcher: 校验 → 授权 → 记录意图 → 执行 → 记录结果
                        ├── 文件与版本检查点
                        ├── ShellExecutor → OS 沙箱与输出 artifact

@@ -6,7 +6,6 @@ import { listSessions } from './core/session-list.js'
 import { selectSession } from './ui/session-picker.js'
 import { translate } from './ui/i18n.js'
 import { createModel, listModels, defaultProvider, defaultModel } from './model/provider.js'
-import { createDemoModel } from './model/demo.js'
 import { TerminalApp } from './ui/app.js'
 import { safeText } from './ui/theme.js'
 import { validateMode } from './core/modes.js'
@@ -19,7 +18,6 @@ export function parseOptions (args, env = process.env) {
     allowPositionals: true,
     args,
     options: {
-      demo: { type: 'boolean', default: false },
       cwd: { type: 'string', default: process.cwd() },
       session: { type: 'string' },
       model: { type: 'string' },
@@ -61,7 +59,6 @@ export const helpText = `Loom Code — durable coding-agent orchestration in Jav
 Usage: loom [options]
        loom resume [SESSION_ID] [--last | --list] [options]
 
-  --demo                   Offline model; real file tools and orchestration
   --cwd DIRECTORY          Workspace (default: current directory)
   --model ID               Model identifier (or LOOM_MODEL)
   --models                 List Vercel AI Gateway chat models
@@ -93,7 +90,7 @@ export async function main (args = process.argv.slice(2)) {
   if (options.help) { process.stdout.write(helpText); return }
   if (options['sandbox-status']) { const status = await sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
   if (options.models) { process.stdout.write(`${listModels().join('\n')}\n`); return }
-  if (!options.resumeCommand && !options.demo && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
+  if (!options.resumeCommand && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
   const cwd = await realpath(options.cwd)
   const preferences = new LanguagePreferences()
   if (options.resumeCommand) {
@@ -119,11 +116,11 @@ export async function main (args = process.argv.slice(2)) {
     if (!selected) throw new Error('Saved root session not found in this workspace')
     if (selected.busy) throw new Error('Session is already open in another process')
   }
-  if (!options.demo && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
+  if (!process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')
   const headless = options.print !== undefined || (options.resume && !process.stdin.isTTY)
   if (options.json && !headless) throw new Error('--json requires --print or headless --resume')
-  if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error('Interactive mode needs a terminal; use --print TASK or --demo --print TASK')
-  const model = options.demo ? createDemoModel() : createModel(options)
+  if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error('Interactive mode needs a terminal; use --print TASK')
+  const model = createModel(options)
   const language = headless ? 'en' : await preferences.load()
   const session = await Session.open(cwd, options.session, { existing: options.resumeCommand })
   let agent

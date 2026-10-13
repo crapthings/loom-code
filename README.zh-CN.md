@@ -16,10 +16,11 @@
 git clone https://github.com/crapthings/loom-code.git
 cd loom-code
 pnpm install --frozen-lockfile --ignore-scripts
-pnpm run demo
+export AI_GATEWAY_API_KEY='YOUR_VERCEL_GATEWAY_KEY'
+pnpm start
 ```
 
-离线演示会真正读取当前工作区，展示工具往返、流式输出与持久化会话，不需要密钥、不调用付费模型。
+启动后使用 Vercel AI Gateway；开发验证可运行 `pnpm run check` 和 `pnpm run check:package`，不需要 API 密钥。
 
 ## 安装为全局命令
 
@@ -34,9 +35,7 @@ pnpm add --global "$PWD" --ignore-scripts
 
 ```sh
 cd /path/to/project
-loom --demo
-
-# 设置 Vercel AI Gateway 凭据后，直接启动真实智能体
+# 设置 Vercel AI Gateway 凭据后启动
 export AI_GATEWAY_API_KEY='YOUR_GATEWAY_KEY'
 loom
 ```
@@ -157,15 +156,16 @@ description: Review JavaScript code quality
 ## 无界面与 SDK
 
 ```sh
-node bin/loom.js --demo --print '查看工作区'
 node bin/loom.js --mode plan --print '分析项目结构' --json
 ```
 
 无界面模式没有交互审批，ask 模式的修改及 ask/edit 模式的 Shell 被拒绝；`--mode edit` 允许文件工具修改，`--mode auto` 允许文件修改和主机命令。失败、中断或恢复阻塞返回非零退出码。
 
-`src/index.js` 导出 Agent、Session、Dispatcher 和模型工厂。产品端只消费事件并提供 `approve(request)`，无需复制执行循环；API 调用方必须先 `initialize()`，用 `enqueue()` / `wait()` 执行，最后 `close()`。
+`src/index.js` 导出 Agent、Session、Dispatcher 和 Vercel 模型工厂。产品端只消费事件并提供 `approve(request)`，无需复制执行循环；API 调用方必须先 `initialize()`，用 `enqueue()` / `wait()` 执行，最后 `close()`。
 
 ## 验证与设计
+
+离线模型仅保留在 `test/fixtures/` 供测试使用，不包含在发布包中；生产 CLI 不提供 `--demo`。
 
 ```sh
 pnpm run check

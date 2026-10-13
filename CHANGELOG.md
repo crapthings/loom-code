@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Move the offline model to test fixtures and remove the public `--demo` option, demo script, and SDK export; package smoke checks inject the fixture through the SDK.
+
 - Add workspace-scoped `loom resume` selection, explicit IDs, `--last`, and read-only text/JSON session catalogs with lock and child-session filtering.
 
 - Continue only unfinished work or saved inputs; preserve prior tool evidence, resume interrupted work before queued tasks, and coalesce simultaneous resume requests.

@@ -29,6 +29,7 @@ async function checkPackage () {
       assert.match(file, /^package\/(?:bin\/|src\/|docs\/(?:architecture|sandbox)\.md$|package\.json$|README(?:\.zh-CN)?\.md$|LICENSE$|NOTICE$)/, `Unexpected packaged file: ${file}`)
       assert.doesNotMatch(file, /(?:^|\/)\.\.(?:\/|$)/)
     }
+    assert.ok(!files.includes('package/src/model/demo.js'))
     for (const required of ['bin/loom.js', 'src/index.js', 'LICENSE', 'NOTICE']) assert.ok(files.includes(`package/${required}`), `Missing ${required}`)
     run('tar', ['-xzf', archive, '-C', temporary], root)
     const packed = path.join(temporary, 'package')
@@ -43,7 +44,7 @@ async function checkPackage () {
     await writeFile(path.join(workspace, 'example.txt'), 'Package smoke fixture\n')
     const entry = path.join(packed, 'bin/loom.js')
     assert.match(run(process.execPath, [entry, '--help'], workspace), /deepseek\/deepseek-v4\.1-flash/)
-    const events = run(process.execPath, [entry, '--demo', '--print', 'Inspect the workspace', '--json'], workspace).trim().split('\n').map(line => JSON.parse(line))
+    const events = run(process.execPath, [path.join(root, 'test/fixtures/packed-agent.js'), path.join(packed, 'src/index.js')], workspace).trim().split('\n').map(line => JSON.parse(line))
     assert.ok(events.some(event => event.type === 'tool.end' && !event.result.isError && event.result.text.includes('example.txt')))
     assert.ok(events.some(event => event.type === 'status' && event.text === 'idle'))
     const catalog = JSON.parse(run(process.execPath, [entry, 'resume', '--list', '--json'], workspace))
@@ -51,7 +52,7 @@ async function checkPackage () {
     assert.equal(catalog.sessions[0].status, 'completed')
     assert.equal(catalog.sessions[0].busy, false)
     run(process.execPath, ['--input-type=module', '-e', 'const api = await import(process.argv[1]); if (!api.Agent || !api.Session || !api.Dispatcher) process.exit(1)', path.join(packed, 'src/index.js')], workspace)
-    process.stdout.write(`Package smoke check passed (${files.length} files; offline CLI and SDK exports).\n`)
+    process.stdout.write(`Package smoke check passed (${files.length} files; CLI metadata and offline SDK execution).\n`)
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }

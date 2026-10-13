@@ -36,14 +36,6 @@ loom
 
 The default route is **Vercel AI Gateway**, with model **`deepseek/deepseek-v4.1-flash`**. The current directory becomes the workspace. The built-in Pi adapter uses Vercel's Anthropic Messages-compatible API; requests use the fixed Vercel gateway endpoint. See the [Vercel model documentation](https://vercel.com/ai-gateway/models/deepseek-v4.1-flash).
 
-For an offline demo with real file inspection but a deterministic model:
-
-```sh
-loom --demo
-# Or, before global installation:
-pnpm run demo
-```
-
 ## Permissions and controls
 
 Enter `/mode` or `/permissions` to open the permission selector. Direct commands are also available:
@@ -120,16 +112,15 @@ The default run budget is 30 model calls and 15 minutes, shared by delegated wor
 
 ```sh
 loom --mode plan --print 'Explain the project structure' --json
-loom --demo --print 'Inspect the workspace'
 pnpm run check
 pnpm run check:package
 ```
 
 Headless mode denies calls requiring interactive approval. `--mode edit` permits file tools; `--mode auto` also permits shell execution. Interrupted, failed, or recovery-blocked runs return a nonzero exit code.
 
-`src/index.js` exports the reusable Agent, Session, Dispatcher, and model factories. Initialize the agent before enqueueing work, wait for completion, and always close it. The same core powers the TUI and headless CLI.
+`src/index.js` exports the reusable Agent, Session, Dispatcher, and Vercel model factory. Initialize the agent before enqueueing work, wait for completion, and always close it. The same core powers the TUI and headless CLI.
 
-Checks enforce Standard Style, one-sentence comments above top-level declarations, behavioral tests with fake providers/local HTTP servers, and a packed-CLI smoke test. Paid-provider acceptance is separate; automated checks never require model credentials. Results are available in [GitHub Actions](https://github.com/crapthings/loom-code/actions/workflows/ci.yml).
+Checks enforce Standard Style, one-sentence comments above top-level declarations, behavioral tests with fake providers/local HTTP servers, and packed CLI/SDK smoke checks. The offline model fixture lives only under `test/fixtures/` and is excluded from the package. Paid-provider acceptance is separate; automated checks never require model credentials. Results are available in [GitHub Actions](https://github.com/crapthings/loom-code/actions/workflows/ci.yml).
 
 ## Scope and contributing
 

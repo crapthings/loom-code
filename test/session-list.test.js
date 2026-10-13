@@ -68,7 +68,7 @@ test('resume CLI lists without credentials or writes and refuses missing or busy
   assert.equal(busy.status, 1)
   assert.match(busy.stderr, /already open/)
   await session.close()
-  const resumed = spawnSync(process.execPath, [entry, 'resume', '--last', '--demo', '--resume', '--json', '--cwd', cwd], { encoding: 'utf8', env })
+  const resumed = spawnSync(process.execPath, [entry, 'resume', '--last', '--resume', '--json', '--cwd', cwd], { encoding: 'utf8', env: { ...env, AI_GATEWAY_API_KEY: 'offline-test-unused' } })
   assert.equal(resumed.status, 0, resumed.stderr)
   const events = resumed.stdout.trim().split('\n').map(JSON.parse)
   assert.ok(events.some(event => event.type === 'resume.skipped'))

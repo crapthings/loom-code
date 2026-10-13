@@ -40,7 +40,6 @@
   },
   "scripts": {
     "start": "node bin/loom.js",
-    "demo": "node bin/loom.js --demo",
     "lint": "node scripts/lint.js",
     "test": "node --test test/*.test.js",
     "check": "pnpm run lint && pnpm test",

@@ -306,7 +306,7 @@ test('CLI validates budgets, modes, and rejects provider selection', () => {
   assert.throws(() => parseOptions(['--steps', 'NaN']), /integer/)
   assert.throws(() => parseOptions(['--mode', 'unsafe']), /mode/)
   assert.throws(() => parseOptions(['--provider', 'google']), /Unknown option/)
-  assert.equal(parseOptions(['--demo', '--mode', 'plan']).demo, true)
+  assert.throws(() => parseOptions(['--demo']), /Unknown option/)
   assert.equal(parseOptions(['--mode', 'auto']).sandbox, 'required')
   assert.equal(parseOptions(['--sandbox', 'off']).sandbox, 'off')
   assert.throws(() => parseOptions(['--sandbox', 'best-effort']), /sandbox/)

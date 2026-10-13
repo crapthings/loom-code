@@ -55,6 +55,41 @@ test('approval defaults to deny and cancellation closes the focused overlay', as
   assert.equal(app.tui.hasOverlay(), false)
 })
 
+test('approval stays centered on wide screens and keeps choices visible for long arguments after resizing', async t => {
+  const { cwd, session } = await fixture(t)
+  const terminal = new FakeTerminal()
+  terminal.columns = 240
+  terminal.rows = 60
+  const app = new TerminalApp({ cwd, session, model: { label: 'fake' }, mode: 'ask', terminal })
+  t.after(() => app.tui.stop())
+  app.bind({ blocked: false, executor: { label: 'Seatbelt · network denied' } })
+  app.start()
+  app.add('Code', 'const background = true\n'.repeat(80))
+  const approval = app.approve({ call: call('shell'), effect: 'shell', args: { command: 'long command '.repeat(200) }, signal: new AbortController().signal })
+  await delay(40)
+  let screen = app.tui.getScreenLines().map(safeText)
+  const top = screen.find(line => line.includes('┌'))
+  assert.equal(top.indexOf('┌'), 76)
+  assert.equal(top.indexOf('┐') - top.indexOf('┌'), 87)
+  assert.ok(screen.some(line => line.includes('Deny')))
+  assert.ok(screen.some(line => line.includes('Allow once')))
+  assert.ok(app.tui.getScreenLines().some(line => line.includes('\x1b[48;5;236m')))
+  terminal.columns = 35
+  terminal.rows = 12
+  terminal.resize()
+  await delay(40)
+  screen = app.tui.getScreenLines().map(safeText)
+  assert.equal(screen.length, 12)
+  assert.ok(screen.some(line => line.includes('Deny')))
+  assert.ok(screen.some(line => line.includes('Allow once')))
+  assert.ok(screen.some(line => line.includes('Enter')))
+  assert.ok(screen.some(line => line.includes('└')))
+  terminal.input('\x1b[B')
+  terminal.input('\r')
+  assert.equal(await approval, true)
+  assert.equal(app.tui.hasOverlay(), false)
+})
+
 test('TUI editor submissions run through the real command and input admission path', async t => {
   const entered = deferred()
   const { cwd, session, model, agent } = await agentFixture(t, [() => { entered.resolve(); return response('Done') }])

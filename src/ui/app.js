@@ -2,6 +2,7 @@ import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTermi
 import { colors, editorTheme, markdownTheme, safeText, selectTheme } from './theme.js'
 import { modes } from '../core/modes.js'
 import { sandboxStatus } from '../execution/executor.js'
+import { SelectionDialog, dialogOptions } from './dialog.js'
 
 // commands describes the terminal commands offered by the editor's completion menu.
 const commands = [
@@ -134,13 +135,10 @@ export class TerminalApp {
   chooseMode () {
     if (this.agent.running) throw new Error('请先用 /stop 停止任务，或等待完成，再切换权限。')
     return new Promise(resolve => {
-      const dialog = new Container()
-      dialog.addChild(new Text(`切换权限 · 当前 ${this.agent.mode}\n完全自动模式跳过审批；执行边界：${this.agent.executor.label}。`, 1, 1))
       const choices = new SelectList(Object.entries(modes).map(([value, mode]) => ({ value, label: `${value} · ${mode.label}`, description: mode.description })), 4, selectTheme)
       choices.setSelectedIndex(Object.keys(modes).indexOf(this.agent.mode))
-      dialog.addChild(choices)
-      dialog.handleInput = data => choices.handleInput(data)
-      const overlay = this.tui.showOverlay(dialog, { width: '90%', maxHeight: '80%' })
+      const dialog = new SelectionDialog({ title: colors.warning(`切换权限 · 当前 ${this.agent.mode}`), preview: `完全自动模式跳过审批；执行边界：${this.agent.executor.label}。`, choices, terminal: this.tui.terminal })
+      const overlay = this.tui.showOverlay(dialog, dialogOptions)
       const finish = mode => { overlay.hide(); this.modeMenuCancel = null; this.tui.requestRender(); resolve(mode) }
       choices.onSelect = item => finish(item.value)
       choices.onCancel = () => finish(undefined)
@@ -159,12 +157,10 @@ export class TerminalApp {
   approve ({ call, effect, args, signal }) {
     if (signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
-      const dialog = new Container()
-      dialog.addChild(new Text(`${colors.warning(effect === 'shell' ? `APPROVE SHELL · ${this.agent?.executor.label || this.sandbox}` : 'APPROVE WORKSPACE EDIT')}\n${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, 1, 1))
-      const choices = new SelectList([{ value: 'deny', label: 'Deny', description: 'Return refusal to the agent' }, { value: 'allow', label: 'Allow once', description: 'Execute this exact call' }], 2, selectTheme)
-      dialog.addChild(choices)
-      dialog.handleInput = data => choices.handleInput(data)
-      const overlay = this.tui.showOverlay(dialog, { width: '90%', maxHeight: '80%' })
+      const choices = new SelectList([{ value: 'deny', label: 'Deny', description: 'Return refusal to the agent' }, { value: 'allow', label: 'Allow once', description: 'Execute this exact call' }], 2, selectTheme, { minPrimaryColumnWidth: 14, maxPrimaryColumnWidth: 14 })
+      const title = colors.warning(effect === 'shell' ? `APPROVE SHELL · ${this.agent?.executor.label || this.sandbox}` : 'APPROVE WORKSPACE EDIT')
+      const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal })
+      const overlay = this.tui.showOverlay(dialog, dialogOptions)
       const finish = allowed => {
         signal.removeEventListener('abort', abort)
         overlay.hide()

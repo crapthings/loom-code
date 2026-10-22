@@ -110,11 +110,11 @@ loom --models
 | `--cwd` | 工作区目录 | 当前目录 |
 | `--mode` | 初始权限 | `ask` |
 | `--sandbox` | required 或显式 off | `required` |
-| `--steps` | 共享聊天请求额度，1–500 | `30` |
+| `--steps` | 共享聊天请求额度，1–500 | 不限 |
 | `--verify` | off 或旁路 shadow 评估 | `off` |
 | `--decision-model` / `LOOM_DECISION_MODEL` | 独立完成评估模型 | `openai/gpt-6-luna-decisions` |
 
-CLI 参数优先于对应环境变量。推理级别为 off/minimal/low/medium/high/xhigh；默认运行期限 15 分钟，子代理、压缩和显式重试共享聊天额度。
+CLI 参数优先于对应环境变量。推理级别为 off/minimal/low/medium/high/xhigh；默认不限制模型调用次数和运行时长。可用 `--steps N` 设置聊天请求额度，子代理、压缩和显式重试共享该额度；运行中仍可按 Esc 中断。
 
 `--models` 和 `--decision-models` 读取锁定依赖中的目录，不调用 API；元数据与费用估算可能不同于网关实际情况。不支持直连供应商、自定义端点或 `LOOM_PROVIDER`。[.env.example](.env.example) 列出环境变量，Loom 不自动加载 `.env`。
 

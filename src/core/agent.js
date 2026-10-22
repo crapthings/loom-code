@@ -14,7 +14,7 @@ import { HistoryStore } from '../storage/history.js'
 
 // Agent coordinates durable input, model steps, tools, and read-only child sessions.
 export class Agent {
-  constructor ({ cwd, session, model, decisionModel, mode = 'ask', approve, emit = () => {}, steps = 30, depth = 0, budget, sandbox = 'required', executor = new ShellExecutor({ cwd, sandbox }) }) {
+  constructor ({ cwd, session, model, decisionModel, mode = 'ask', approve, emit = () => {}, steps = Infinity, depth = 0, budget, sandbox = 'required', executor = new ShellExecutor({ cwd, sandbox }) }) {
     this.cwd = cwd
     this.session = session
     this.model = model
@@ -69,7 +69,9 @@ export class Agent {
     this.controller = new AbortController()
     this.budget = budget
     const controller = this.controller
-    const timer = setTimeout(() => controller.abort(new Error('Run time budget exhausted')), Math.max(1, budget.deadline - Date.now()))
+    const timer = Number.isFinite(budget.deadline)
+      ? setTimeout(() => controller.abort(new Error('Run time budget exhausted')), Math.max(1, budget.deadline - Date.now()))
+      : undefined
     const task = Promise.resolve().then(() => {
       controller.signal.throwIfAborted()
       return action(controller.signal)

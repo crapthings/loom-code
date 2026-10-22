@@ -132,11 +132,11 @@ loom --models
 | `--cwd` | Workspace directory | Current directory |
 | `--mode` | Initial permissions | `ask` |
 | `--sandbox` | `required` or explicit host execution with `off` | `required` |
-| `--steps` | Shared chat-model call allowance, from 1 to 500 | `30` |
+| `--steps` | Shared chat-model call allowance, from 1 to 500 | Unlimited |
 | `--verify` | `off` or observational completion evaluation with `shadow` | `off` |
 | `--decision-model` / `LOOM_DECISION_MODEL` | Separate completion classifier | `openai/gpt-6-luna-decisions` |
 
-CLI flags override the corresponding environment variables. Reasoning levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. The default run deadline is 15 minutes; delegated work, compaction, and explicit retries share the chat-call budget.
+CLI flags override the corresponding environment variables. Reasoning levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Runs have no model-call or wall-clock limit by default. Set `--steps N` to cap chat calls; delegated work, compaction, and explicit retries share that allowance. Esc still interrupts a running task.
 
 `loom --models` and `loom --decision-models` read the pinned model catalog without API calls. Catalog metadata and cost estimates can differ from current gateway availability, limits, or billing. Direct providers, custom endpoints and `LOOM_PROVIDER` are not supported. [`.env.example`](.env.example) documents environment variables; Loom does **not** automatically load `.env` files.
 

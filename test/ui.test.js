@@ -378,6 +378,9 @@ test('slash permission commands update the runtime, prompt, tools, and header to
 })
 
 test('CLI validates budgets, modes, and rejects provider selection', () => {
+  assert.equal(parseOptions([], {}).steps, Infinity)
+  assert.equal(parseOptions(['--steps', '100'], {}).steps, 100)
+  for (const steps of ['0', '501', 'Infinity']) assert.throws(() => parseOptions(['--steps', steps], {}), /integer/)
   assert.throws(() => parseOptions(['--steps', 'NaN']), /integer/)
   assert.throws(() => parseOptions(['--mode', 'unsafe']), /mode/)
   assert.throws(() => parseOptions(['--provider', 'google']), /Unknown option/)

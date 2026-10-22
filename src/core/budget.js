@@ -1,6 +1,6 @@
 // Budget shares model-call and wall-clock limits across a run and its delegated agents.
 export class Budget {
-  constructor ({ steps = 30, milliseconds = 15 * 60 * 1000 } = {}) {
+  constructor ({ steps = Infinity, milliseconds = Infinity } = {}) {
     this.remaining = steps
     this.deadline = Date.now() + milliseconds
     this.calls = 0

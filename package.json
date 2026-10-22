@@ -43,7 +43,7 @@
     "sandbox",
     "developer-tools"
   ],
-  "packageManager": "pnpm@12.4.1",
+  "packageManager": "pnpm@12.14.0",
   "bin": {
     "loom": "bin/loom.js"
   },
@@ -58,9 +58,9 @@
     "check:package": "node scripts/check-package.js"
   },
   "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "0.0.79",
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "zustand": "5.0.15"
   },
   "devDependencies": {

@@ -190,6 +190,31 @@ test('late input admitted during settlement starts a successor rather than getti
   assert.equal(session.pending.length, 0)
 })
 
+test('default runs finish beyond thirty model calls without a deadline', async t => {
+  const script = Array.from({ length: 31 }, (_, index) => response([call('list_files', {}, `call-${index}`)], 'toolUse'))
+  script.push(response('Finished'))
+  const { agent, model } = await agentFixture(t, script)
+  await agent.enqueue('Inspect workspace repeatedly')
+  await agent.wait()
+  assert.equal(agent.status, 'idle')
+  assert.equal(model.requests.length, 32)
+  assert.equal(agent.budget.remaining, Infinity)
+  assert.equal(agent.budget.deadline, Infinity)
+})
+
+test('explicit time budgets still interrupt an active model request', async t => {
+  const budget = new Budget({ milliseconds: 60000 })
+  const { agent, session } = await agentFixture(t, [async (request, { signal }) => {
+    await delay(60000, undefined, { signal })
+    return response('Unexpected completion')
+  }], { budget })
+  budget.deadline = Date.now() + 50
+  await agent.enqueue('Inspect workspace')
+  await agent.wait()
+  assert.equal(agent.status, 'interrupted')
+  assert.equal(session.events.some(event => event.type === 'task.finished'), false)
+})
+
 test('budget exhaustion stops a tool loop instead of resetting after every step', async t => {
   const { agent, session } = await agentFixture(t, [response([call('list_files')], 'toolUse')], { steps: 1 })
   await agent.enqueue('Keep investigating')

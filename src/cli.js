@@ -25,7 +25,7 @@ export function parseOptions (args, env = process.env) {
       mode: { type: 'string', default: 'ask' },
       sandbox: { type: 'string', default: 'required' },
       'sandbox-status': { type: 'boolean', default: false },
-      steps: { type: 'string', default: '30' },
+      steps: { type: 'string' },
       reasoning: { type: 'string', default: 'off' },
       print: { type: 'string' },
       json: { type: 'boolean', default: false },
@@ -50,8 +50,8 @@ export function parseOptions (args, env = process.env) {
   validateMode(values.mode)
   if (!['off', 'shadow'].includes(values.verify)) throw new Error('--verify must be off or shadow')
   if (!['required', 'off'].includes(values.sandbox)) throw new Error('--sandbox must be required or off')
-  const steps = Number(values.steps)
-  if (!Number.isInteger(steps) || steps < 1 || steps > 500) throw new Error('--steps must be an integer from 1 to 500')
+  const steps = values.steps === undefined ? Infinity : Number(values.steps)
+  if (values.steps !== undefined && (!Number.isInteger(steps) || steps < 1 || steps > 500)) throw new Error('--steps must be an integer from 1 to 500')
   if (!['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(values.reasoning)) throw new Error('Invalid --reasoning level')
   if (env.LOOM_PROVIDER) throw new Error('LOOM_PROVIDER is not supported; remove it and configure only the gateway model')
   const model = values.model || env.LOOM_MODEL || defaultModel
@@ -78,7 +78,7 @@ Usage: loom [options]
   --resume                 Explicitly execute unfinished work in a selected session
   --last                   Open the most recent available session (loom resume)
   --list                   List workspace sessions; --json for JSON (loom resume)
-  --steps N                Shared model-call allowance (default: 30)
+  --steps N                Shared model-call allowance, 1–500 (default: unlimited)
   --reasoning LEVEL        off|minimal|low|medium|high|xhigh
   --print TASK             Run without a TUI; shell approval is denied
   --json                   Stream JSON events in headless mode

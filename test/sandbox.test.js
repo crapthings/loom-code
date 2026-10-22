@@ -4,6 +4,8 @@ import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createServer } from 'node:net'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { ShellExecutor, sandboxStatus } from '../src/execution/executor.js'
 import { shellEnvironment } from '../src/execution/policy.js'
 import { createTools, Dispatcher } from '../src/tools/dispatcher.js'
@@ -146,13 +148,27 @@ test('Linux sandbox preparation never executes helpers from a project-controlled
   const original = process.env.PATH
   process.env.PATH = `${cwd}:${original}`
   t.after(() => { process.env.PATH = original })
-  const status = await sandboxStatus()
+  const status = await sandboxStatus(cwd)
   assert.deepEqual(status.errors, [])
   assert.deepEqual(status.warnings, [])
   const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'auto' })
   const result = await execute(dispatcher, "console.log('trusted helpers')")
   assert.equal(result.isError, false, result.content[0].text)
   await assert.rejects(readFile(marker), { code: 'ENOENT' })
+})
+
+test('sandbox diagnostics honor the CLI workspace without opening a model or session', async t => {
+  const cwd = await mkdtemp(path.join(tmpdir(), 'loom-diagnostic-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const entry = fileURLToPath(new URL('../bin/loom.js', import.meta.url))
+  const result = spawnSync(process.execPath, [entry, '--sandbox-status', '--cwd', cwd], { encoding: 'utf8', env: shellEnvironment(tmpdir()), timeout: 10000 })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  const status = JSON.parse(result.stdout)
+  assert.deepEqual(status.errors, [])
+  assert.deepEqual(status.warnings, [])
+  await assert.rejects(readFile(path.join(cwd, '.loom', 'sessions')), { code: 'ENOENT' })
+  const missing = await sandboxStatus(path.join(cwd, 'missing'))
+  assert.match(missing.errors.join('\n'), /ENOENT/)
 })
 
 test('file tools also reject credentials instead of relying on the shell sandbox', async t => {

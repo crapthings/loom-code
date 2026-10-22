@@ -109,7 +109,7 @@ Install Cua Driver 0.28+ and configure OS permissions before enabling --computer
 export async function main (args = process.argv.slice(2)) {
   const options = parseOptions(args)
   if (options.help) { process.stdout.write(helpText); return }
-  if (options['sandbox-status']) { const status = await sandboxStatus(); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
+  if (options['sandbox-status']) { const status = await sandboxStatus(options.cwd); process.stdout.write(`${JSON.stringify(status, null, 2)}\n`); if (status.errors.length || status.warnings.length) process.exitCode = 1; return }
   if (options.models) { process.stdout.write(`${listModels().join('\n')}\n`); return }
   if (options['decision-models']) { process.stdout.write(`${listDecisionModels().join('\n')}\n`); return }
   if (!options.resumeCommand && !process.env.AI_GATEWAY_API_KEY) throw new Error('Set AI_GATEWAY_API_KEY to use Vercel AI Gateway')

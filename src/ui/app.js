@@ -363,7 +363,7 @@ export class TerminalApp {
   }
 
   async showSandbox () {
-    const status = await sandboxStatus()
+    const status = await sandboxStatus(this.cwd)
     if (this.closing) return
     this.add(this.t('label.sandbox'), `${this.executionLabel()}\n${JSON.stringify(status, null, 2)}\n${this.t('sandbox.details')}`)
   }

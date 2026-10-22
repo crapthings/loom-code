@@ -32,18 +32,22 @@ async function acquire (signal) {
   }
 }
 
-// sandboxStatus reports platform support and dependencies without running a model or shell task.
-export async function sandboxStatus () {
+// sandboxStatus checks platform support and dependencies against the selected workspace and an isolated scratch directory.
+export async function sandboxStatus (cwd = process.cwd()) {
   if (!['darwin', 'linux'].includes(process.platform)) return { backend: 'unsupported', errors: ['Loom sandbox supports macOS and Linux only'], warnings: [] }
   const backend = process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap'
   const release = await acquire(new AbortController().signal)
+  let scratch
   try {
-    SandboxManager.updateConfig({ ...sandboxPolicy(process.cwd(), tmpdir()), ...sandboxHelpers() })
+    scratch = await realpath(await mkdtemp(path.join(tmpdir(), 'loom-shell-')))
+    SandboxManager.updateConfig({ ...sandboxPolicy(await realpath(cwd), scratch), ...sandboxHelpers() })
     return { backend, ...SandboxManager.checkDependencies() }
   } catch (error) {
     return { backend, errors: [error.message], warnings: [] }
   } finally {
-    try { await SandboxManager.reset() } finally { release() }
+    try {
+      try { await SandboxManager.reset() } finally { if (scratch) await rm(scratch, { recursive: true, force: true }) }
+    } finally { release() }
   }
 }
 

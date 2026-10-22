@@ -18,18 +18,21 @@ function judgment (choice = 'incomplete') {
   return { stopReason: 'stop', answers: { coverage: { type: 'choice', choice, confidence: 0.8, probabilities: { complete: choice === 'complete' ? 0.8 : 0.1, incomplete: choice === 'incomplete' ? 0.8 : 0.1, unknown: choice === 'unknown' ? 0.8 : 0.1 } }, unsupportedClaims: { type: 'bool', probability: 0.8 }, missingVerification: { type: 'bool', probability: 0.7 } }, usage: { totalTokens: 100, cost: { total: 0.00001 } } }
 }
 
-test('decision models have separate offline catalogs and opt-in CLI selection', () => {
+test('decision models have separate offline catalogs with automatic supervision and optional completion checks', () => {
   assert.equal(createDecisionModel().label, `vercel-ai-gateway/${defaultDecisionModel}`)
   assert.ok(listDecisionModels().includes(`vercel-ai-gateway/${defaultDecisionModel}`))
   assert.ok(listDecisionModels().includes('vercel-ai-gateway/typesafe-ai/jev'))
   assert.ok(!listModels().includes(`vercel-ai-gateway/${defaultDecisionModel}`))
   assert.throws(() => createModel({ model: defaultDecisionModel }), /Unknown model/)
   assert.throws(() => createDecisionModel({ model: 'openai/gpt-6.1-sol' }), /Unknown decision model/)
-  assert.equal(parseOptions([], {}).verify, 'off')
+  assert.equal(parseOptions([], {}).verify, 'auto')
+  assert.equal(parseOptions([], {}).supervise, 'auto')
+  assert.equal(parseOptions(['--supervise', 'off'], {}).supervise, 'off')
+  assert.throws(() => parseOptions(['--supervise', 'on'], {}), /--supervise/)
   assert.equal(parseOptions(['--verify', 'shadow'], {}).decisionModel, defaultDecisionModel)
   assert.equal(parseOptions(['--decision-model', defaultDecisionModel], { LOOM_DECISION_MODEL: 'typesafe-ai/jev' }).decisionModel, defaultDecisionModel)
   assert.equal(parseOptions([], { LOOM_DECISION_MODEL: 'typesafe-ai/jev' }).decisionModel, 'typesafe-ai/jev')
-  assert.throws(() => parseOptions(['--verify', 'auto'], {}), /--verify/)
+  assert.throws(() => parseOptions(['--verify', 'invalid'], {}), /--verify/)
 })
 
 test('native Pi classifier sends System One questions and never retries a failed HTTP request', async t => {
@@ -193,4 +196,24 @@ test('a crash during shadow evaluation preserves task completion and resumes onl
   assert.equal(model.requests.length, 1)
   assert.equal(model.requests[0].messages.at(-1).content, 'Next task')
   assert.ok(session.events.filter(event => event.type === 'inbox.delivered').every(event => !event.message.content.includes('Continue only')))
+})
+
+test('resumed completion evaluation retains the original requirement and latest corrections', async t => {
+  const evaluations = []
+  const decisionModel = { label: 'fake/decision', classify: async context => { evaluations.push(context); return judgment('unknown') } }
+  const { agent, session } = await agentFixture(t, [response([call('list_files')], 'toolUse'), () => { throw new Error('Interrupted transport') }, response('Rendering remains unverified')], { decisionModel })
+  await agent.enqueue('Fix invisible blocks after landing; verify actual rendering')
+  await agent.wait()
+  assert.equal(agent.status, 'failed')
+  for (let index = 0; index < 9; index++) await session.append('inbox.delivered', { message: { role: 'user', content: `Correction ${index}`, timestamp: Date.now() } })
+  await agent.resume()
+  await agent.wait()
+  assert.equal(agent.status, 'idle')
+  assert.equal(evaluations.length, 1)
+  const state = evaluations[0].state
+  assert.equal(state.taskInputs[0].text, 'Fix invisible blocks after landing; verify actual rendering')
+  assert.ok(state.taskInputs.some(input => input.text === 'Correction 8'))
+  assert.equal(state.taskInputs.length, 8)
+  assert.equal(state.omitted.inputs, 3)
+  assert.ok(state.evidence.some(event => event.type === 'tool.finished'))
 })

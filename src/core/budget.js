@@ -7,6 +7,7 @@ export class Budget {
     this.tokens = 0
     this.cost = 0
     this.decisionCalls = 0
+    this.shadowCalls = 0
     this.decisionTokens = 0
     this.decisionCost = 0
   }
@@ -23,8 +24,11 @@ export class Budget {
     this.cost += usage?.cost?.total || 0
   }
 
-  takeDecision () {
-    if (this.decisionCalls >= 3 || Date.now() >= this.deadline) return false
+  takeDecision (mode = 'shadow') {
+    if (!['shadow', 'progress', 'completion'].includes(mode)) throw new Error('Unknown decision mode')
+    if (mode === 'progress' && this.remaining <= 0) return false
+    if ((mode === 'shadow' && this.shadowCalls >= 3) || Date.now() >= this.deadline) return false
+    if (mode === 'shadow') this.shadowCalls++
     this.decisionCalls++
     return true
   }

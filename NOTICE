@@ -5,6 +5,11 @@ Their licenses remain applicable to those dependencies.
 Loom's terminal view-state store uses Zustand, licensed under the MIT License.
 Its license remains applicable to that dependency.
 
+Loom's optional Cua integration uses @modelcontextprotocol/client,
+licensed under the MIT License. Its license remains applicable to that
+dependency. Cua Driver is an independently installed, MIT-licensed executable;
+Loom does not bundle it or the separate Cua Spaces runtime.
+
 Loom also uses @anthropic-ai/sandbox-runtime, authored by Anthropic PBC
 and licensed under Apache-2.0. Its license remains applicable to that
 dependency; Loom's own source remains MIT-licensed.

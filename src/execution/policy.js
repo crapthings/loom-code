@@ -42,6 +42,7 @@ export function shellEnvironment (scratch) {
     TEMP: scratch,
     XDG_CACHE_HOME: scratch,
     npm_config_cache: path.join(scratch, 'npm'),
+    pnpm_config_pm_on_fail: 'error',
     LANG: process.env.LANG || 'en_US.UTF-8',
     TERM: 'dumb'
   }

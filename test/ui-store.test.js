@@ -2,6 +2,17 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUiStore } from '../src/ui/store.js'
 
+test('completion review has a live phase that clears on settlement and cancellation', () => {
+  const store = createUiStore()
+  store.dispatch({ type: 'status', text: 'running' })
+  store.dispatch({ type: 'completion.assessment.start' })
+  assert.equal(store.getState().activity.phase, 'verifying')
+  store.dispatch({ type: 'completion.assessment.end', outcome: 'continue' })
+  assert.equal(store.getState().activity.phase, 'running')
+  store.dispatch({ type: 'status', text: 'interrupted' })
+  assert.equal(store.getState().activity, null)
+})
+
 test('UI stores isolate instances and preserve snapshots across streaming and queue delivery', () => {
   const first = createUiStore()
   const second = createUiStore()
@@ -93,4 +104,45 @@ test('failed model streams are discarded and late deltas cannot revive them', ()
   store.dispatch({ type: 'assistant.start', stepId: 'next' })
   store.dispatch({ type: 'assistant.delta', stepId: 'next', text: 'Recovered' })
   assert.equal(store.getState().streams.get('next'), 'Recovered')
+})
+
+test('activity tracks parallel tools, clears stale process status, and ignores late output', () => {
+  const store = createUiStore()
+  store.dispatch({ type: 'status', text: 'running', at: 1000 })
+  store.dispatch({ type: 'tool.start', call: { id: 'a', name: 'shell' }, at: 1100 })
+  store.dispatch({ type: 'tool.start', call: { id: 'b', name: 'read_file' }, at: 1200 })
+  store.dispatch({ type: 'tool.progress', kind: 'process.started', pid: 123, boundary: 'sandbox', at: 1300 })
+  store.dispatch({ type: 'tool.end', call: { id: 'a' }, at: 1400 })
+  assert.equal(store.getState().activity.phase, 'tools')
+  assert.deepEqual(store.getState().activity.tools, { b: 'read_file' })
+  store.dispatch({ type: 'tool.end', call: { id: 'b' }, at: 1500 })
+  store.dispatch({ type: 'assistant.start', stepId: 'next', at: 1600 })
+  assert.equal(store.getState().status, 'running')
+  assert.equal(store.getState().activity.phase, 'waiting')
+  assert.equal(store.getState().activity.started, 1000)
+  store.dispatch({ type: 'assistant.retry', stepId: 'next', at: 1700 })
+  assert.equal(store.getState().activity.phase, 'retrying')
+  store.dispatch({ type: 'assistant.delta', stepId: 'next', text: 'Hello', at: 1800 })
+  assert.equal(store.getState().activity.phase, 'receiving')
+  assert.equal(store.getState().activity.lastEvent, 1800)
+  store.dispatch({ type: 'error', text: 'Cancelled', at: 1900 })
+  store.dispatch({ type: 'assistant.delta', stepId: 'next', text: 'Late', at: 2000 })
+  assert.equal(store.getState().activity, null)
+})
+
+test('background process state survives tool return and UI inspection without changing an event wait', () => {
+  const store = createUiStore()
+  const process = { id: 'p-123456abcdef', status: 'running', command: 'build', started: 1000 }
+  store.dispatch({ type: 'status', text: 'running' })
+  store.dispatch({ type: 'process.state', process, text: 'compiling' })
+  const before = store.getState()
+  store.dispatch({ type: 'tool.end', call: { id: 'launch' }, status: 'running' })
+  assert.equal(store.getState().processes.get(process.id).status, 'running')
+  store.dispatch({ type: 'status', text: 'waiting for processes' })
+  store.dispatch({ type: 'tool.start', call: { id: 'inspection', name: 'process_status' }, source: 'process-control' })
+  store.dispatch({ type: 'tool.end', call: { id: 'inspection' }, source: 'process-control' })
+  assert.equal(store.getState().activity.phase, 'waiting for processes')
+  store.dispatch({ type: 'process.state', process: { ...process, status: 'completed' }, text: 'done' })
+  assert.equal(store.getState().processes.get(process.id).status, 'completed')
+  assert.equal(before.processes.get(process.id).status, 'running')
 })

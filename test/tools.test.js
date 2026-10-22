@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, readdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
 import { readdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
@@ -135,7 +135,8 @@ test('truncated calls and invalid schemas never reach execution', async t => {
 test('shell requires approval even in edit mode and returns bounded output with an artifact', async t => {
   const { cwd, session } = await fixture(t)
   let approvals = 0
-  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'edit', approve: async () => { approvals++; return true } })
+  const events = []
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), emit: event => events.push(event), mode: 'edit', approve: async () => { approvals++; return true } })
   const result = await dispatcher.run(call('shell', { command: 'node -e "process.stdout.write(\'x\'.repeat(20000))"' }), new AbortController().signal)
   assert.equal(approvals, 1)
   assert.equal(result.isError, false)
@@ -143,6 +144,12 @@ test('shell requires approval even in edit mode and returns bounded output with 
   const artifact = result.content[0].text.match(/artifact: ([a-f0-9-]+\.txt)/)[1]
   assert.equal((await readFile(path.join(session.directory, artifact), 'utf8')).length, 20000)
   assert.equal(session.events.find(event => event.type === 'tool.finished').message.toolCallId, 'call-1')
+  const progress = events.find(event => event.kind === 'process.output')
+  assert.equal(progress.callId, 'call-1')
+  assert.match(progress.text, /^x+$/)
+  assert.ok(progress.text.length <= 2000)
+  assert.ok(events.indexOf(progress) < events.findIndex(event => event.type === 'tool.end'))
+  assert.equal(events.at(-1).status, 'completed')
 })
 
 test('session approval covers only that tool and is not restored in another dispatcher or allowed in plan mode', async t => {
@@ -202,6 +209,85 @@ test('literal search works without leaking metadata or following symlinks', asyn
   const result = await dispatcher.run(call('search', { query: 'needle' }), new AbortController().signal)
   assert.equal(result.isError, false)
   assert.match(result.content[0].text, /hello.js:2: needle/)
+})
+
+test('search finds dependency source beyond the old size cap and preserves matches deep in long lines', async t => {
+  const { cwd, session } = await fixture(t)
+  await mkdir(path.join(cwd, 'node_modules', 'example', 'dist'), { recursive: true })
+  await writeFile(path.join(cwd, 'node_modules', 'example', 'dist', 'bundle.js'), `${'padding\n'.repeat(90000)}${'x'.repeat(800)}target.literal[0]\n`)
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'plan' })
+  const signal = new AbortController().signal
+  const excluded = await dispatcher.run(call('search', { query: 'target.literal[0]' }, 'excluded'), signal)
+  assert.match(excluded.content[0].text, /Excluded.*traversal entries/)
+  assert.match(excluded.content[0].text, /Coverage: incomplete/)
+  assert.match(excluded.content[0].text, /paths omitted.*node_modules/)
+  assert.match(excluded.content[0].text, /not evidence of absence/)
+  const found = await dispatcher.run(call('search', { query: 'target.literal[0]', path: 'node_modules/example' }, 'found'), signal)
+  assert.equal(found.isError, false)
+  assert.match(found.content[0].text, /dist\/bundle.js:90001: .*target\.literal\[0\]/)
+  assert.match(found.content[0].text, /complete within traversal scope/)
+  assert.match(found.content[0].text, /Matching lines shortened/)
+})
+
+test('explicit subdirectories include builds while protecting credentials, metadata, and symlinks', async t => {
+  const { cwd, session } = await fixture(t)
+  const root = path.join(cwd, 'package')
+  for (const directory of ['dist', 'coverage', 'vendor', 'node_modules', '.git']) {
+    await mkdir(path.join(root, directory), { recursive: true })
+    await writeFile(path.join(root, directory, 'data.txt'), directory === '.git' ? 'needle PRIVATE' : 'needle')
+  }
+  await writeFile(path.join(root, '.env'), 'needle SECRET')
+  await symlink(path.join(root, '.env'), path.join(root, 'redirect'))
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'plan' })
+  const signal = new AbortController().signal
+  const found = await dispatcher.run(call('search', { path: 'package', query: 'needle' }), signal)
+  const text = found.content[0].text
+  for (const directory of ['dist', 'coverage', 'vendor', 'node_modules']) assert.ok(text.includes(`package/${directory}/data.txt:1: needle`))
+  assert.match(text, /0 dependency\/build directories, 2 protected paths, 1 symlinks/)
+  assert.match(text, /Coverage: incomplete/)
+  assert.doesNotMatch(text, /PRIVATE|SECRET|\.env|\.git/)
+  const denied = await dispatcher.run(call('search', { path: 'package/.git', query: 'needle' }, 'protected'), signal)
+  assert.equal(denied.isError, true)
+})
+
+test('search reports skipped text and binary files instead of claiming complete negative evidence', async t => {
+  const { cwd, session } = await fixture(t)
+  await writeFile(path.join(cwd, 'large.txt'), `${'x'.repeat(2 * 1024 * 1024)}needle`)
+  await writeFile(path.join(cwd, 'binary.bin'), 'needle\0')
+  await writeFile(path.join(cwd, 'small.txt'), 'ordinary text')
+  await writeFile(path.join(cwd, '.env'), 'needle SECRET')
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'plan' })
+  const signal = new AbortController().signal
+  const result = await dispatcher.run(call('search', { query: 'needle' }), signal)
+  assert.equal(result.isError, false)
+  const text = result.content[0].text
+  assert.match(text, /coverage is incomplete/)
+  assert.match(text, /read 1\/3 enumerated files; skipped 2/)
+  assert.match(text, /large.txt: exceeds 2 MiB/)
+  assert.match(text, /binary.bin: binary content/)
+  assert.doesNotMatch(text, /SECRET|\.env/)
+  const explicit = await dispatcher.run(call('search', { query: 'needle', path: 'large.txt' }, 'large'), signal)
+  assert.match(explicit.content[0].text, /coverage is incomplete/)
+  const complete = await dispatcher.run(call('search', { query: 'needle', path: 'small.txt' }, 'small'), signal)
+  assert.match(complete.content[0].text, /No matches in searched files/)
+  assert.match(complete.content[0].text, /complete within traversal scope/)
+  const missing = await dispatcher.run(call('search', { query: 'needle', path: 'missing.txt' }, 'missing'), signal)
+  assert.equal(missing.isError, true)
+})
+
+test('search marks result limits while settling cancelled requests', async t => {
+  const { cwd, session } = await fixture(t)
+  await writeFile(path.join(cwd, 'matches.txt'), 'needle\n'.repeat(201))
+  const dispatcher = new Dispatcher({ session, tools: createTools({ cwd, session }), mode: 'plan' })
+  const result = await dispatcher.run(call('search', { query: 'needle' }), new AbortController().signal)
+  assert.equal(result.content[0].text.split('\n').filter(line => line.startsWith('matches.txt:')).length, 200)
+  assert.match(result.content[0].text, /Match limit reached/)
+  assert.match(result.content[0].text, /Coverage: incomplete/)
+  const controller = new AbortController()
+  controller.abort()
+  const cancelled = await dispatcher.run(call('search', { query: 'needle' }, 'cancelled'), controller.signal)
+  assert.equal(cancelled.isError, true)
+  assert.equal(session.events.find(event => event.callId === 'cancelled' && event.type === 'tool.finished').status, 'cancelled')
 })
 
 test('restoring checkpoints walks edit history without overwriting later external changes', async t => {

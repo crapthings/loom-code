@@ -6,6 +6,7 @@ import { SelectionDialog, dialogOptions } from './dialog.js'
 import { catalogs, translate } from './i18n.js'
 import { createUiStore } from './store.js'
 import { createCommands } from './commands.js'
+import { outputPreview } from './activity.js'
 import { randomUUID } from 'node:crypto'
 
 // TerminalApp presents a scrollable transcript, persistent editor, execution status, and cancellable approvals.
@@ -18,7 +19,8 @@ export class TerminalApp {
       language: input => this.switchLanguage(input),
       sandbox: () => this.showSandbox(),
       queue: input => this.agent.enqueue(input, 'queue'),
-      stop: () => this.agent.interrupt(),
+      stop: id => id ? this.agent.inspectProcesses(id).then(text => this.add(this.t('process.label'), text)) : this.agent.interrupt(),
+      jobs: () => this.agent.inspectProcesses().then(() => this.showProcesses()),
       continue: () => this.agent.resume(),
       compact: () => this.compactContext(),
       undo: () => this.agent.undo(),
@@ -31,6 +33,7 @@ export class TerminalApp {
     this.transcript = new Container()
     this.streamComponents = new Map()
     this.queuedComponents = new Map()
+    this.toolComponents = new Map()
     this.commandTail = Promise.resolve()
     this.session = session
     this.model = model
@@ -38,6 +41,7 @@ export class TerminalApp {
     this.cwd = cwd
     this.header = new Text('', 1, 0)
     this.footer = new Text('', 1, 0)
+    this.activityLine = new Text('', 1, 0)
     this.editor = new Editor(this.tui, editorTheme)
     this.unsubscribe = this.store.subscribe((state, previous) => this.renderState(state, previous))
     this.renderState(this.store.getState())
@@ -49,6 +53,7 @@ export class TerminalApp {
     this.tui.setLayoutRoot(new VStack([
       { component: this.header, basis: 'auto', shrink: 0 },
       { component: new ScrollView(this.transcript, { primary: true, follow: 'end' }), basis: 0, grow: 1, minSize: 1 },
+      { component: this.activityLine, basis: 'auto', shrink: 0 },
       { component: this.editor, basis: 'auto', maxSize: 8, shrink: 0 },
       { component: this.footer, basis: 'auto', shrink: 0 }
     ]))
@@ -101,11 +106,65 @@ export class TerminalApp {
         if (!state.streams.has(stepId)) this.streamComponents.delete(stepId)
       }
     }
+    if (state.activity !== previous.activity || state.processes !== previous.processes || state.dialogs !== previous.dialogs || state.language !== previous.language) this.renderActivity(state)
+    this.tui.requestRender()
+  }
+
+  renderActivity (state = this.store.getState()) {
+    clearTimeout(this.activityTimer)
+    const activity = state.activity
+    if (!activity || state.closing) { this.activityLine.setText(''); return }
+    const now = Date.now()
+    const phase = state.dialogs.some(dialog => dialog.kind === 'approval') ? 'approval' : activity.phase
+    const label = Object.hasOwn(catalogs.en, `activity.${phase}`) ? this.t(`activity.${phase}`) : this.statusLabel(phase)
+    const names = Object.values(activity.tools).join(', ')
+    const frame = ['⠋', '⠙', '⠹', '⠸'][Math.floor(now / 200) % 4]
+    const text = this.t('activity.detail', { phase: label, elapsed: Math.floor((now - activity.started) / 1000), quiet: Math.floor((now - activity.lastEvent) / 1000) })
+    const processes = [...state.processes.values()].filter(process => ['starting', 'running'].includes(process.status))
+    const rows = processes.map(process => this.processLine(process, now))
+    this.activityLine.setText([`${colors.accent(`${frame} ${text}`)}${names ? ` · ${safeText(names)}` : ''}`, ...rows].join('\n'))
+    this.tui.requestRender()
+    this.activityTimer = setTimeout(() => this.renderActivity(), 200)
+    this.activityTimer.unref?.()
+  }
+
+  processLine (process, now = Date.now()) {
+    now = process.finished || now
+    return safeText(this.t('process.detail', { id: process.id, status: this.t(`process.${process.status}`), elapsed: Math.floor((now - process.started) / 1000), quiet: Math.floor((now - (process.lastOutput || process.started)) / 1000), command: process.command.replace(/\s+/g, ' ').slice(0, 100) }))
+  }
+
+  showProcesses () {
+    const processes = [...this.store.getState().processes.values()]
+    this.add(this.t('process.label'), processes.length ? processes.map(process => `${this.processLine(process)}\n${process.artifact}\n${process.text}`).join('\n\n') : this.t('process.empty'))
+  }
+
+  renderTool (event) {
+    const key = `${event.child || 'root'}:${event.call?.id || event.callId}`
+    let record = this.toolComponents.get(key)
+    if (event.type === 'tool.start') {
+      const owner = event.child ? `${event.role} · ${event.child.slice(0, 8)} · ` : ''
+      record = { started: Date.now(), name: owner + event.call.name, args: outputPreview(JSON.stringify(event.call.arguments)), component: this.add(this.t('tool.start', { name: owner + event.call.name }), outputPreview(JSON.stringify(event.call.arguments))) }
+      this.toolComponents.set(key, record)
+    }
+    if (event.type === 'tool.progress' && typeof event.text === 'string' && record) record.component.setText(`${colors.accent(`⠋ ${record.name}`)}\n${safeText(record.args)}\n${safeText(outputPreview(event.text.split('\n').slice(-8).join('\n'), 2000))}`)
+    if (event.type !== 'tool.end') return
+    const name = event.call.name
+    const label = this.t(event.status === 'running' ? 'tool.background' : event.status === 'cancelled' ? 'tool.cancelled' : event.status === 'unknown' ? 'tool.unknown' : event.result.isError ? 'tool.failed' : 'tool.completed')
+    const icon = event.status === 'running' ? '↻' : event.status === 'cancelled' ? '■' : event.status === 'unknown' ? '?' : event.result.isError ? '✗' : '✓'
+    const paint = event.status === 'running' ? colors.accent : event.status === 'unknown' ? colors.warning : event.result.isError ? colors.error : colors.good
+    const owner = event.child ? `${event.role} · ${event.child.slice(0, 8)} · ` : ''
+    const duration = record ? ` · ${((Date.now() - record.started) / 1000).toFixed(1)}s` : ''
+    const component = record?.component || this.add(name, '')
+    component.setText(`${paint(`${icon} ${owner}${name} · ${label}${duration}`)}\n${record ? `${safeText(record.args)}\n` : ''}${safeText(outputPreview(event.result.text))}`)
+    this.toolComponents.delete(key)
     this.tui.requestRender()
   }
 
   start () {
     this.add(this.t('label.welcome'), this.t('welcome.controls'))
+    if (this.agent.progressModel) this.add(this.t('assessment.label'), this.t('assessment.enabled', { model: this.agent.progressModel.label }))
+    if (this.agent.decisionModel && this.agent.verification === 'auto') this.add(this.t('completion.label'), this.t('completion.enabled'))
+    if (this.agent.computer) this.add(this.t('computer.label'), this.t('computer.enabled'))
     for (const message of this.session.messages) {
       if (message.role === 'user') this.add(this.t('label.you'), message.content)
       if (message.role === 'assistant') this.add('Loom', message.content.filter(part => part.type === 'text').map(part => part.text).join('\n'))
@@ -127,9 +186,15 @@ export class TerminalApp {
 
   event (event) {
     if (this.store.getState().closed) return
+    if (['tool.start', 'tool.progress', 'tool.end'].includes(event.type)) this.renderTool(event)
+    if (event.type === 'progress.review') {
+      const owner = event.child ? `${event.role} · ${event.child.slice(0, 8)} · ` : ''
+      this.add(owner + this.t('progress.label'), `${event.reasons.map(reason => this.t(`progress.${reason}`)).join('\n')}\n${this.t('progress.action')}`)
+    }
     if (event.child) {
       if (event.type === 'user') this.add(`${event.role} · ${event.child.slice(0, 8)}`, event.text)
-      if (event.type === 'tool.start') this.add(this.t('child.tool', { role: event.role }), event.call.name)
+      if (event.type === 'status' && event.budget && ['idle', 'failed', 'interrupted'].includes(event.text)) this.add(`${event.role} · ${event.child.slice(0, 8)}`, this.statusLabel(event.text))
+      this.store.dispatch(event)
       if (event.type === 'error') this.add(this.t('child.error', { role: event.role }), event.text)
       return
     }
@@ -139,6 +204,15 @@ export class TerminalApp {
     if (event.type === 'verification.finished') {
       const text = event.status === 'completed' ? this.t('verification.result', { coverage: this.t(`verification.${event.answers.coverage.choice}`) }) : this.t('verification.unavailable', { status: event.status })
       this.add(this.t('verification.label'), text)
+      this.refreshStatus(this.agent.status, event.budget)
+    }
+    if (event.type === 'progress.assessment.end') {
+      const text = event.status === 'completed' ? this.t(`assessment.${event.verdict}`) : this.t('assessment.unavailable')
+      this.add(this.t('assessment.label'), `${text}${event.action ? `\n${this.t(`assessment.action.${event.action}`)}` : ''}`)
+      this.refreshStatus(this.agent.status, event.budget)
+    }
+    if (event.type === 'completion.assessment.end') {
+      this.add(this.t('completion.label'), this.t(`completion.${event.outcome}`))
       this.refreshStatus(this.agent.status, event.budget)
     }
     if (event.type === 'queued') this.queuedComponents.set(event.inputId, this.add(this.t('pending.label', { delivery: event.delivery }), event.text))
@@ -155,9 +229,8 @@ export class TerminalApp {
       this.streamComponents.get(event.stepId)?.setText(safeText(event.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n')))
       this.refreshStatus(this.agent.status, event.budget)
     }
-    if (event.type === 'tool.start') this.add(this.t('tool.start', { name: event.call.name }), JSON.stringify(event.call.arguments))
-    if (event.type === 'tool.end') this.add(this.t(event.result.isError ? 'tool.failed' : 'tool.completed'), event.result.text.slice(0, 2500))
-    if (event.type === 'error') this.add(this.t('label.stopped'), `${event.text}\n${this.t('error.resume')}`)
+    if (event.type === 'error') this.add(this.t('label.stopped'), this.agent.computer?.blocker ? this.t('computer.blocked', { reason: this.agent.computer.blocker.code }) : `${event.text}\n${this.t('error.resume')}`)
+    if (event.type === 'process.state' && !['starting', 'running'].includes(event.process.status)) this.add(this.t('process.label'), `${this.processLine(event.process)}\n${event.process.artifact}\n${event.text || ''}`)
     this.store.dispatch({ ...event, budget: event.budget || this.agent?.budget })
     this.tui.requestRender()
   }
@@ -231,7 +304,7 @@ export class TerminalApp {
         { value: 'allow', label: this.t('approval.once'), description: this.t('approval.once.description') },
         { value: 'session', label: this.t('approval.session'), description: this.t('approval.session.description', { tool: safeText(call.name) }) }
       ], 3, selectTheme, { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 24 })
-      const title = colors.warning(this.t(effect === 'shell' ? 'approval.shell' : 'approval.write', { boundary: this.executionLabel() }))
+      const title = colors.warning(this.t(effect === 'computer' ? 'approval.computer' : effect === 'shell' ? 'approval.shell' : 'approval.write', { boundary: this.executionLabel() }))
       const dialog = new SelectionDialog({ title, preview: `${safeText(call.name)}\n${safeText(JSON.stringify(args, null, 2)).slice(0, 2000)}`, choices, terminal: this.tui.terminal, t: (key) => this.t(key) })
       const overlay = this.showDialog('approval', dialog, { callId: call.id, effect })
       let settled = false
@@ -282,7 +355,10 @@ export class TerminalApp {
   }
 
   showStatus () {
+    const computer = this.agent.computer
+    this.add(this.t('computer.label'), this.t(computer ? computer.closed ? 'computer.closed' : computer.blocker ? 'computer.blocked' : 'computer.enabled' : 'computer.off', { reason: computer?.blocker?.code }))
     this.add(this.t('label.session'), this.t('session.details', { id: this.session.id, log: this.session.directory, pending: this.session.pending.length, status: this.statusLabel(this.agent.status) }))
+    this.add(this.t('assessment.label'), this.t('assessment.settings', { model: this.agent.progressModel?.label || this.t('assessment.off'), completion: this.agent.decisionModel ? `${this.agent.verification} · ${this.agent.decisionModel.label}` : this.t('assessment.off'), calls: this.agent.budget?.decisionCalls || 0, cost: `$${(this.agent.budget?.decisionCost || 0).toFixed(6)}` }))
     this.add(this.t('label.context'), this.t('context.usage', this.agent.contextUsage()))
   }
 
@@ -320,6 +396,8 @@ export class TerminalApp {
     } finally {
       this.unsubscribe()
       this.store.dispatch({ type: 'ui.closed' })
+      clearTimeout(this.activityTimer)
+      this.toolComponents.clear()
       this.streamComponents.clear()
       this.queuedComponents.clear()
       this.tui.stop()

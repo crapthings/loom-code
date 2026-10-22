@@ -34,6 +34,7 @@ function changeStatus (state, status, counters) {
 
 // showToolProgress converts structured process progress into display data without retaining tool objects.
 function showToolProgress (state, event) {
+  if (event.kind === 'process.output') return state
   const status = event.kind === 'process.started' ? { kind: event.kind, boundary: event.boundary, pid: event.pid } : event.text
   return changeStatus(state, status, event.budget)
 }
@@ -57,7 +58,7 @@ function deliverInput (state, event) {
 function startAssistant (state, event) {
   const streams = new Map(state.streams)
   streams.set(event.stepId, '')
-  return { ...state, streams, budget: budgetSnapshot(event.budget, state.budget) }
+  return { ...state, status: 'running', streams, budget: budgetSnapshot(event.budget, state.budget) }
 }
 
 // appendAssistant ignores late deltas and appends text without mutating older snapshots.
@@ -83,6 +84,17 @@ function failAssistant (state, event) {
   return { ...state, streams: new Map(), budget }
 }
 
+// showProcess retains live command state and a bounded completion history independently of tool-call settlement.
+function showProcess (state, event) {
+  const processes = new Map(state.processes)
+  processes.set(event.process.id, { ...event.process, text: event.text || '' })
+  for (const [id, process] of processes) {
+    if (processes.size <= 32) break
+    if (!['starting', 'running'].includes(process.status)) processes.delete(id)
+  }
+  return { ...state, processes }
+}
+
 // transitions maps mutually exclusive event names to pure display-state transformations.
 export const transitions = Object.freeze({
   'ui.language': changeLanguage,
@@ -94,6 +106,8 @@ export const transitions = Object.freeze({
   'ui.status': (state, event) => changeStatus(state, event.status, event.budget),
   status: (state, event) => changeStatus(state, event.text, event.budget),
   'tool.progress': showToolProgress,
+  'process.state': showProcess,
+  'tool.end': (state, event) => event.source === 'process-control' ? state : changeStatus(state, 'running', event.budget),
   queued: queueInput,
   user: deliverInput,
   'assistant.start': startAssistant,

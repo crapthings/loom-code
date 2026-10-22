@@ -6,7 +6,8 @@ export function createCommands (actions, t) {
     language: { aliases: ['lang'], argument: 'optional', execute: actions.language },
     sandbox: { execute: actions.sandbox },
     queue: { argument: 'required', execute: actions.queue },
-    stop: { execute: actions.stop },
+    stop: { argument: 'optional', pattern: /^p-[a-f0-9]{12}$/, execute: actions.stop },
+    jobs: { execute: actions.jobs },
     continue: { execute: actions.continue },
     compact: { execute: actions.compact },
     undo: { execute: actions.undo },
@@ -24,7 +25,7 @@ export function createCommands (actions, t) {
     execute: (name, argument) => {
       const command = registry.get(name)
       if (!command) throw new Error(t('command.unknown'))
-      if ((!command.argument && argument) || (command.argument === 'required' && !argument)) throw new Error(t('command.arguments', { command: name }))
+      if ((!command.argument && argument) || (command.argument === 'required' && !argument) || (command.pattern && argument && !command.pattern.test(argument))) throw new Error(t('command.arguments', { command: name }))
       return command.execute(argument)
     }
   }

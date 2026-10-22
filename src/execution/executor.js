@@ -5,8 +5,9 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { sandboxPolicy, shellEnvironment } from './policy.js'
 import { sandboxHelpers } from './helpers.js'
+import { prepareIsolated } from './sandbox-client.js'
 
-// tail serializes access to the runtime's process-global sandbox manager across SDK agents.
+// tail serializes diagnostic and injected managers within one worker, never across live command workers.
 let tail = Promise.resolve()
 
 // acquire reserves the global manager without admitting a cancelled command into the sandbox.
@@ -48,16 +49,18 @@ export async function sandboxStatus () {
 
 // ShellExecutor prepares mandatory OS isolation or an explicitly selected unsandboxed launch with no fallback.
 export class ShellExecutor {
-  constructor ({ cwd, sandbox = 'required', manager = SandboxManager }) {
+  constructor ({ cwd, sandbox = 'required', manager }) {
     if (!['required', 'off'].includes(sandbox)) throw new Error('Sandbox must be required or off')
     this.cwd = cwd
     this.sandbox = sandbox
-    this.manager = manager
+    this.manager = manager || SandboxManager
+    this.isolated = !manager && sandbox === 'required'
     this.label = sandbox === 'off' ? 'UNSANDBOXED HOST' : `${process.platform === 'darwin' ? 'Seatbelt' : 'bubblewrap'} · network denied`
   }
 
   async prepare (command, signal) {
-    const release = await acquire(signal)
+    if (this.isolated) return prepareIsolated(this.cwd, command, signal)
+    const release = this.sandbox === 'off' ? () => {} : await acquire(signal)
     let scratch
     let initialized = false
     let wrapped = false
@@ -76,6 +79,7 @@ export class ShellExecutor {
     try {
       signal.throwIfAborted()
       scratch = await realpath(await mkdtemp(path.join(tmpdir(), 'loom-shell-')))
+      signal.throwIfAborted()
       const env = shellEnvironment(scratch)
       if (this.sandbox === 'off') return { command: '/bin/bash', args: ['--noprofile', '--norc', '-c', command], env, cleanup, label: this.label }
       if (!['darwin', 'linux'].includes(process.platform)) throw new Error('Sandbox unavailable: only macOS and Linux are supported; no host fallback')

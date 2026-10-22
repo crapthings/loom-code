@@ -1,6 +1,6 @@
 # Shell sandbox
 
-Loom uses pinned `@anthropic-ai/sandbox-runtime@0.0.79` with Seatbelt on macOS and bubblewrap on Linux. Dispatcher controls authorization; ShellExecutor controls isolation. File tools enforce their own paths and version checks outside the shell sandbox.
+Loom uses pinned `@anthropic-ai/sandbox-runtime@0.0.81` with Seatbelt on macOS and bubblewrap on Linux. Dispatcher controls authorization; ShellExecutor controls isolation. File tools enforce their own paths and version checks outside the shell sandbox.
 
 ## Setup and diagnosis
 
@@ -33,7 +33,9 @@ Default `--sandbox required` checks dependencies and constructs policy for each 
 | Helpers | Linux helpers come from fixed system directories and seccomp binaries from the pinned dependency, never project PATH |
 | Lifecycle | Bound command duration/output, cancel process groups, settle tool results and clean runtime/scratch resources |
 
-The process-global SandboxManager is serialized across SDK agents so one command cannot reset another's policy. Project guidance and skills use controlled loaders; workspace configuration cannot expand shell permissions.
+Each command owns a SandboxManager in an isolated Node worker. Its configuration, proxy resources and cleanup remain alive until that command's process group stops, so background commands do not hold a cross-session global lock or reset another command's policy. Diagnostic and injected managers are serialized within their own worker. The child environment is sanitized, including `pnpm_config_pm_on_fail=error` to reject unavailable package-manager versions without a network download. Project guidance and skills use controlled loaders; workspace configuration cannot expand shell permissions.
+
+ProcessManager persists launch intent before spawning, returns a process ID after a short wait and records a separate completion event. Waiting does not terminate the process; only an explicit execution deadline, cancellation, failure or output limit does. An IPC-connected runner owns the Unix process group and kills it if the harness connection disappears. On normal completion, a short idle drain handles descendant-held stdout/stderr before group cleanup. Commands that deliberately escape their process group remain a limitation. Crash recovery marks unfinished outcomes unknown and never replays commands or signals stale PIDs from history.
 
 ## Limits and validation
 

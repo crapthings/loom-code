@@ -184,3 +184,85 @@ test('paged original records preserve long evidence and search excludes recalled
     assert.equal(JSON.parse(first.text + second.text).message.content[0].text.length, 15007)
   } finally { await history.close() }
 })
+
+test('history projects visible evidence without private reasoning, provider signatures or nested recall copies', async t => {
+  const { session, history } = await historyFixture(t)
+  try {
+    const source = await session.append('message', { message: response([{ type: 'thinking', thinking: 'PRIVATE_SENTINEL', signature: 'SIGNATURE_SENTINEL' }, { type: 'text', text: 'Public observation' }, call('read_file', { path: 'app.js' })]) })
+    const recalled = await history.request('read', { session: session.id, seq: source.seq })
+    assert.equal(recalled.projection, 'visible-evidence')
+    assert.equal(recalled.historical, true)
+    assert.match(recalled.text, /Public observation|read_file/)
+    assert.doesNotMatch(recalled.text, /PRIVATE_SENTINEL|SIGNATURE_SENTINEL/)
+    const nested = await session.append('tool.finished', { callId: 'recall', message: { role: 'toolResult', toolName: 'read_history', content: [{ type: 'text', text: JSON.stringify({ text: JSON.stringify(source) }) }] } })
+    const result = await history.request('read', { session: session.id, seq: nested.seq })
+    assert.match(result.text, /Copied recall output omitted/)
+    assert.doesNotMatch(result.text, /PRIVATE_SENTINEL|Public observation/)
+    assert.equal(session.events[source.seq].message.content[0].thinking, 'PRIVATE_SENTINEL')
+  } finally { await history.close() }
+})
+
+test('history excludes recall query parameters but retains mixed original text and execution evidence', async t => {
+  const { session, history } = await historyFixture(t)
+  try {
+    for (const name of ['search_history', 'read_history', 'get_memory', 'list_memories', 'remember', 'forget_memory']) {
+      await session.append('message', { message: response([call(name, { query: 'recall-only-needle' }, name)], 'toolUse') })
+    }
+    const original = await session.append('message', {
+      message: response([
+        { type: 'text', text: 'Original finding: visible blocks' },
+        call('search_history', { query: 'recall-only-needle' }, 'recall'),
+        call('search', { query: 'catalogue', path: 'node_modules/fiber' }, 'source')
+      ], 'toolUse')
+    })
+    assert.equal((await history.request('search', { query: 'recall-only-needle' })).results.length, 0)
+    const found = await history.request('search', { query: 'visible blocks' })
+    assert.deepEqual(found.results.map(result => result.seq), [original.seq])
+    assert.doesNotMatch(found.results[0].excerpt, /recall-only-needle|search_history/)
+    assert.equal((await history.request('search', { query: 'catalogue' })).results[0].seq, original.seq)
+    assert.match((await history.request('read', { session: session.id, seq: original.seq })).text, /recall-only-needle/)
+  } finally { await history.close() }
+})
+
+test('changing extraction rules rebuilds the disposable index without modifying original journals', async t => {
+  const { cwd, session, history } = await historyFixture(t)
+  await session.append('message', { message: response('original evidence') })
+  await session.append('message', { message: response([call('search_history', { query: 'self-reference' })], 'toolUse') })
+  await history.request('search', { query: 'evidence' })
+  await history.close()
+  const journal = await readFile(path.join(session.directory, 'events.jsonl'), 'utf8')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(path.join(cwd, '.loom', 'history.sqlite'))
+  try {
+    db.exec('PRAGMA user_version = 1')
+    db.prepare('INSERT INTO history(session, seq, event_id, kind, role, body) VALUES (?, ?, ?, ?, ?, ?)').run(session.id, 2, 'stale', 'message', 'assistant', 'self-reference')
+  } finally { db.close() }
+  const rebuilt = new HistoryStore(cwd)
+  try {
+    const first = await rebuilt.request('search', { query: 'self-reference' })
+    assert.equal(first.results.length, 0)
+    assert.ok(first.scannedBytes > 0)
+    assert.equal((await rebuilt.request('search', { query: 'evidence' })).results.length, 1)
+    assert.equal(await readFile(path.join(session.directory, 'events.jsonl'), 'utf8'), journal)
+  } finally { await rebuilt.close() }
+})
+
+test('history can narrow to a discovered session and enforces child isolation for that scope', async t => {
+  const { cwd, session, history } = await historyFixture(t)
+  const other = await Session.open(cwd, 'earlier-task')
+  try {
+    await other.append('message', { message: response('target evidence') })
+    await session.append('message', { message: response('target evidence in current session') })
+    const signal = new AbortController().signal
+    const dispatcher = new Dispatcher({ session, mode: 'plan', tools: historyTools({ session, history, allowWorkspace: true }) })
+    const result = await dispatcher.run(call('search_history', { query: 'target', sessionId: other.id }), signal)
+    const found = JSON.parse(result.content[0].text)
+    assert.equal(found.results.length, 1)
+    assert.equal(found.results[0].sessionId, other.id)
+    const conflicting = await dispatcher.run(call('search_history', { query: 'target', sessionId: other.id, scope: 'workspace' }, 'conflict'), signal)
+    assert.equal(conflicting.isError, true)
+    const child = new Dispatcher({ session, mode: 'plan', tools: historyTools({ session, history, allowWorkspace: false }) })
+    const denied = await child.run(call('search_history', { query: 'target', sessionId: other.id }, 'child'), signal)
+    assert.equal(denied.isError, true)
+  } finally { await history.close(); await other.close() }
+})

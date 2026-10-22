@@ -86,19 +86,21 @@ test('bounded task projection preserves first/latest inputs and outcome omission
   assert.ok(journal.count() - baseline <= 201)
 })
 
-test('single-pass compaction chooses the same safe user boundary across varied conversations', async () => {
+test('compaction handoffs cover the omitted prefix and retain the latest assistant exchanges', async () => {
   for (let seed = 0; seed < 24; seed++) {
     const events = Array.from({ length: 12 }, (_, seq) => ({ seq, type: 'message', message: seq % (seed % 4 + 2) === 0 ? { role: 'user', content: `Request ${seq}` } : response(`Reply ${seq}`) }))
-    const users = events.filter(event => event.message.role === 'user')
     const assistants = events.filter(event => event.message.role === 'assistant')
-    const candidate = assistants.length > 3 ? assistants.at(-2) : users.at(-1)
-    const expected = users.findLast(event => event.seq <= candidate.seq) || candidate
     const session = memorySession(events)
     const model = fakeModel([response('Handoff')])
     await compactContext({ session, model, system: '', tools: [], budget: new Budget(), signal: new AbortController().signal, emit: () => {}, force: true })
-    assert.equal(session.latestEvent('context.compacted').through, expected.seq - 1)
+    const through = session.latestEvent('context.compacted').through
+    assert.ok(through > 0)
+    assert.ok(through < assistants.at(-2).seq)
     const summarized = JSON.parse(model.requests[0].messages[0].content).conversation
-    assert.deepEqual(summarized, events.filter(event => event.message && event.seq < expected.seq).map(event => event.message))
+    assert.deepEqual(summarized.map(event => event.seq), events.filter(event => event.message && event.seq <= through).map(event => event.seq))
+    const messages = contextMessages(session)
+    assert.ok(messages.includes(assistants.at(-1).message))
+    assert.ok(messages.includes(assistants.at(-2).message))
   }
 })
 

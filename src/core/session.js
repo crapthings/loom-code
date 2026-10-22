@@ -4,6 +4,7 @@ import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readHandleText, readText } from '../io.js'
+import { processNotice } from './process-events.js'
 
 // Session stores ordered facts durably before publishing them to observers.
 export class Session extends EventEmitter {
@@ -103,6 +104,9 @@ export class Session extends EventEmitter {
     const runs = new Map()
     const steps = new Map()
     const decisions = new Map()
+    const processes = new Map()
+    const finishedProcesses = new Map()
+    const observedProcesses = new Set()
     for (const event of this.events) {
       if (event.type === 'tool.started') started.set(event.call.id, event)
       if (event.type === 'tool.finished') started.delete(event.callId)
@@ -112,13 +116,17 @@ export class Session extends EventEmitter {
       if (event.type === 'step.finished') steps.delete(event.stepId)
       if (event.type === 'decision.started') decisions.set(event.decisionId, event)
       if (event.type === 'decision.finished') decisions.delete(event.decisionId)
+      if (event.type === 'process.started') processes.set(event.process.id, event)
+      if (event.type === 'process.finished') { processes.delete(event.process.id); finishedProcesses.set(event.process.id, event) }
+      if (event.type === 'process.delivered') observedProcesses.add(event.processId)
+      if (event.type === 'tool.finished' && event.process && !['running', 'starting'].includes(event.process.status) && event.source !== 'process-control') observedProcesses.add(event.process.id)
     }
-    for (const decisionId of decisions.keys()) await this.append('decision.finished', { decisionId, mode: 'shadow', status: 'unknown', recovery: true })
+    for (const [decisionId, decision] of decisions) await this.append('decision.finished', { decisionId, mode: decision.mode, status: 'unknown', recovery: true })
     for (const stepId of steps.keys()) await this.append('step.finished', { stepId, stopReason: 'aborted', recovery: true })
     for (const runId of runs.keys()) await this.append('run.finished', { runId, status: 'interrupted', recovery: true })
     for (const { call, source } of started.values()) {
       const text = 'Execution outcome unknown after restart; inspect the workspace before retrying.'
-      const message = source === 'control' ? { role: 'user', content: `User-initiated ${call.name}: ${text}`, timestamp: Date.now() } : toolResult(call, text, true)
+      const message = toolEventMessage(call, toolResult(call, text, true), source)
       await this.append('tool.finished', { callId: call.id, status: 'unknown', source, message })
     }
     const messages = this.messages
@@ -128,7 +136,16 @@ export class Session extends EventEmitter {
         await this.append('message', { message: toolResult(call, 'Not executed before restart.', true) })
       }
     }
-    if (started.size) await this.append('recovery.required', { count: started.size })
+    for (const [id, event] of processes) {
+      const process = { ...event.process, status: 'unknown' }
+      const finished = await this.append('process.finished', { process, callId: process.callId, status: 'unknown', recovery: true, text: 'Process outcome unknown after restart. Inspect output artifacts and partial effects before retrying; this command was not replayed.' })
+      finishedProcesses.set(id, finished)
+    }
+    for (const [id, event] of finishedProcesses) {
+      if (observedProcesses.has(id)) continue
+      await this.append('process.delivered', { processId: id, message: { role: 'user', content: processNotice(event), timestamp: Date.now() }, recovery: true })
+    }
+    if (started.size || processes.size) await this.append('recovery.required', { count: started.size + processes.size })
     return this.events.findLast(event => event.type === 'recovery.required' || event.type === 'recovery.acknowledged')?.type === 'recovery.required'
   }
 
@@ -144,8 +161,9 @@ export class Session extends EventEmitter {
 // unfinishedRun distinguishes unfinished execution from observation after a durably completed task.
 export function unfinishedRun (events) {
   const run = events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
-  if (!run || (run.type === 'run.finished' && !['interrupted', 'failed'].includes(run.status))) return false
   const task = events.findLast(event => ['inbox.delivered', 'step.started', 'task.finished'].includes(event.type))
+  if (task?.type === 'task.finished' && ['unverified', 'blocked'].includes(task.outcome)) return true
+  if (!run || (run.type === 'run.finished' && !['interrupted', 'failed'].includes(run.status))) return false
   return !(task?.type === 'task.finished' && task.runId === run.runId)
 }
 
@@ -170,6 +188,14 @@ async function acquireLock (file) {
 }
 
 // toolResult creates a provider-neutral reply paired with its originating call.
-export function toolResult (call, text, isError = false) {
-  return { role: 'toolResult', toolCallId: call.id, toolName: call.name, content: [{ type: 'text', text }], isError, timestamp: Date.now() }
+export function toolResult (call, text, isError = false, images = []) {
+  return { role: 'toolResult', toolCallId: call.id, toolName: call.name, content: [{ type: 'text', text }, ...images], isError, timestamp: Date.now() }
+}
+
+// toolEventMessage records harness checks and user controls without fabricating unpaired model tool responses.
+export function toolEventMessage (call, message, source) {
+  if (source === 'process-control') return undefined
+  if (!['control', 'preflight'].includes(source)) return message
+  const label = source === 'preflight' ? 'Harness readiness check' : 'User-initiated'
+  return { role: 'user', content: `${label} ${call.name}: ${message.content[0].text}`, timestamp: message.timestamp }
 }

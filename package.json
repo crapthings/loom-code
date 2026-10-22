@@ -61,6 +61,7 @@
     "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "zustand": "5.0.15"
   },
   "devDependencies": {

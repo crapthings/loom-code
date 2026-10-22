@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Agent } from '../src/core/agent.js'
-import { fixture } from './helpers.js'
+import { fixture, response, call } from './helpers.js'
 import { parseOptions, main } from '../src/cli.js'
 
 test('default routing uses Vercel regardless of unrelated provider credentials', () => {
@@ -98,20 +98,20 @@ test('real Pi adapter streams text and preserves tool-call envelopes without pai
 })
 
 // localModels injects an offline HTTP transport to test stream and tool contracts without exposing endpoint configuration.
-function localModels (baseUrl) {
+function localModels (baseUrl, input = ['text']) {
   const models = createModels()
   models.setProvider(createProvider({
     id: 'vercel-ai-gateway',
     name: 'Offline test transport',
     baseUrl,
     auth: { apiKey: { name: 'test', resolve: async () => ({ auth: { apiKey: 'offline-test' } }) } },
-    models: [{ id: 'local-model', name: 'local-model', api: 'openai-completions', provider: 'vercel-ai-gateway', baseUrl, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 8192 }],
+    models: [{ id: 'local-model', name: 'local-model', api: 'openai-completions', provider: 'vercel-ai-gateway', baseUrl, reasoning: false, input, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 8192 }],
     api: openAICompletionsApi()
   }))
   return models
 }
 
-test('injected offline HTTP adapter sends a streaming request and decodes a local SSE response', async t => {
+test('injected offline HTTP adapter preserves tool-result pixels and decodes a local SSE response', async t => {
   let request
   const server = createServer(async (req, res) => {
     let text = ''
@@ -125,14 +125,23 @@ test('injected offline HTTP adapter sends a streaming request and decodes a loca
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
-  const collection = localModels(`http://127.0.0.1:${server.address().port}/v1`)
+  const collection = localModels(`http://127.0.0.1:${server.address().port}/v1`, ['text', 'image'])
   const model = createModel({ collection, model: 'local-model' })
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j2ioAAAAASUVORK5CYII='
+  const messages = [
+    { role: 'user', content: 'Inspect the actual window', timestamp: 1 },
+    response([call('computer_get_window_state', { pid: 42 }, 'capture')], 'toolUse'),
+    { role: 'toolResult', toolCallId: 'capture', toolName: 'computer_get_window_state', content: [{ type: 'text', text: 'Window captured' }, { type: 'image', data: png, mimeType: 'image/png' }], isError: false, timestamp: 2 }
+  ]
   let text = ''
-  const result = await model.complete({ system: 'Inspect', messages: [{ role: 'user', content: 'Task', timestamp: 1 }], tools: [] }, { signal: new AbortController().signal, onDelta: delta => { text += delta } })
+  const result = await model.complete({ system: 'Inspect', messages, tools: [] }, { signal: new AbortController().signal, onDelta: delta => { text += delta } })
   assert.equal(result.stopReason, 'stop', result.errorMessage)
   assert.equal(text, 'Local evidence')
   assert.equal(request.model, 'local-model')
   assert.equal(request.stream, true)
+  assert.deepEqual(model.input, ['text', 'image'])
+  const pixels = request.messages.flatMap(message => Array.isArray(message.content) ? message.content : []).find(part => part.type === 'image_url')
+  assert.equal(pixels?.image_url.url, `data:image/png;base64,${png}`)
 })
 
 test('real HTTP tool calls create a file and feed the committed result back to the provider', async t => {

@@ -7,6 +7,8 @@ import { unfinishedRun } from './session.js'
 function sessionStatus (events, calls) {
   const recovery = events.findLast(event => event.type === 'recovery.required' || event.type === 'recovery.acknowledged')
   if (calls.size || recovery?.type === 'recovery.required') return 'recovery required'
+  const task = events.findLast(event => ['inbox.delivered', 'step.started', 'task.finished'].includes(event.type))
+  if (task?.type === 'task.finished' && ['unverified', 'blocked'].includes(task.outcome)) return task.outcome
   const run = events.findLast(event => event.type === 'run.started' || event.type === 'run.finished')
   if (!run || (run.type === 'run.finished' && !['completed', 'interrupted', 'failed'].includes(run.status))) return 'empty'
   if (!unfinishedRun(events)) return 'completed'

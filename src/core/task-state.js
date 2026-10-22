@@ -11,7 +11,7 @@ export function taskState (session, { unfinishedOnly = false } = {}) {
   const delivered = session.latestEvent('inbox.delivered')
   const active = Boolean(delivered && delivered.seq > (completed?.seq ?? -1))
   if (unfinishedOnly && !active) return null
-  const from = active ? (completed?.seq ?? -1) + 1 : completed?.from ?? 0
+  const from = active ? delivered.resumeFrom ?? (completed?.seq ?? -1) + 1 : completed?.from ?? 0
   const inputs = []
   const outcomes = []
   let firstInput
@@ -26,7 +26,7 @@ export function taskState (session, { unfinishedOnly = false } = {}) {
       inputCount++
       if (inputs.length < 7) inputs.push(event)
     }
-    if (event.type === 'tool.finished') {
+    if (['tool.finished', 'process.finished'].includes(event.type)) {
       outcomeCount++
       if (outcomes.length < 12) outcomes.push(event)
     }
@@ -37,7 +37,7 @@ export function taskState (session, { unfinishedOnly = false } = {}) {
   return {
     version: 1,
     from,
-    status: active ? 'unfinished' : completed ? 'execution-finished' : 'empty',
+    status: active ? 'unfinished' : completed?.outcome || (completed ? 'execution-finished' : 'empty'),
     inputs: inputs.map(boundedInput),
     outcomes: outcomes.map(event => ({ seq: event.seq, callId: event.callId, status: event.status, executed: event.executed })),
     omitted: { inputs: inputCount - inputs.length, outcomes: outcomeCount - outcomes.length }

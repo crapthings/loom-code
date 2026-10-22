@@ -4,15 +4,22 @@ import path from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
 import { historyRoot, historyFile, historySessions, readHistorySource, sessionId } from './history-source.js'
+import { evidenceEvent } from '../core/evidence.js'
+
+// recallTools excludes recall requests and copied responses from the searchable evidence index.
+const recallTools = new Set(['search_history', 'read_history', 'list_memories', 'get_memory', 'remember', 'forget_memory'])
+
+// indexVersion invalidates derived rows whenever their schema or extraction rules change.
+const indexVersion = 2
 
 // eventText indexes model-visible evidence while excluding nested history responses and evaluation payloads.
 function eventText (event) {
   if (event.type === 'context.compacted') return event.summary
-  if (['search_history', 'read_history', 'list_memories', 'get_memory', 'remember', 'forget_memory'].includes(event.message?.toolName)) return ''
+  if (recallTools.has(event.message?.toolName)) return ''
   const content = event.message?.content
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
-  return content.map(part => part.type === 'text' ? part.text : part.type === 'toolCall' ? `${part.name} ${JSON.stringify(part.arguments)}` : '').join('\n')
+  return content.map(part => part.type === 'text' ? part.text : part.type === 'toolCall' && !recallTools.has(part.name) ? `${part.name} ${JSON.stringify(part.arguments)}` : '').join('\n').trim()
 }
 
 // eventDigest detects edits to any previously indexed event before accepting an append-only update.
@@ -39,11 +46,15 @@ class HistoryIndex {
     const db = new DatabaseSync(file, { timeout: 250, allowExtension: false })
     try {
       db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA max_page_count = 65536;')
-      const version = db.prepare('PRAGMA user_version').get().user_version
-      if (version !== 0 && version !== 1) throw new Error('Unsupported history index version; preserve it before rebuilding')
-      db.exec(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, signature TEXT NOT NULL, watermark INTEGER NOT NULL, digest TEXT NOT NULL, title TEXT NOT NULL, parent TEXT, updated INTEGER NOT NULL);
-        CREATE VIRTUAL TABLE IF NOT EXISTS history USING fts5(session UNINDEXED, seq UNINDEXED, event_id UNINDEXED, kind UNINDEXED, role UNINDEXED, body, tokenize = 'trigram');
-        PRAGMA user_version = 1;`)
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const version = db.prepare('PRAGMA user_version').get().user_version
+        if (version !== indexVersion) db.exec('DROP TABLE IF EXISTS history; DROP TABLE IF EXISTS sessions;')
+        db.exec(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, signature TEXT NOT NULL, watermark INTEGER NOT NULL, digest TEXT NOT NULL, title TEXT NOT NULL, parent TEXT, updated INTEGER NOT NULL);
+          CREATE VIRTUAL TABLE IF NOT EXISTS history USING fts5(session UNINDEXED, seq UNINDEXED, event_id UNINDEXED, kind UNINDEXED, role UNINDEXED, body, tokenize = 'trigram');
+          PRAGMA user_version = ${indexVersion};`)
+        db.exec('COMMIT')
+      } catch (error) { db.exec('ROLLBACK'); throw error }
       this.db = db
       return db
     } catch (error) { db.close(); throw error }
@@ -113,9 +124,9 @@ class HistoryIndex {
     const { events } = await readHistorySource(workerData.cwd, session)
     const event = events[seq]
     if (!event) throw new Error('History event not found')
-    const text = JSON.stringify(event)
+    const text = JSON.stringify(evidenceEvent(event))
     const truncated = text.length > offset + 12000
-    return { sessionId: session, seq, eventId: event.id, offset, nextOffset: truncated ? offset + 12000 : null, text: text.slice(offset, offset + 12000), truncated }
+    return { sessionId: session, seq, eventId: event.id, historical: true, projection: 'visible-evidence', offset, nextOffset: truncated ? offset + 12000 : null, text: text.slice(offset, offset + 12000), truncated }
   }
 }
 

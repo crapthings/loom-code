@@ -5,8 +5,8 @@ import { readText, writeSynced } from '../io.js'
 import { Type } from '@earendil-works/pi-ai'
 import { protectedNames, isCredentialPath, runtimeRoot } from '../execution/policy.js'
 
-// skippedDirectories reuses constant-time exclusions for each workspace directory entry.
-const skippedDirectories = new Set([...protectedNames, 'node_modules', 'vendor', 'dist', 'coverage'])
+// skippedDirectories omits generated trees only when exploring the workspace root.
+const skippedDirectories = new Set(['node_modules', 'vendor', 'dist', 'coverage'])
 
 // hashText identifies the exact UTF-8 file version observed by an agent.
 export function hashText (text) {
@@ -54,41 +54,22 @@ export function fileTools (cwd, session) {
     },
     {
       name: 'list_files',
-      description: 'List a bounded workspace tree while skipping dependency, Git, and harness directories.',
+      description: 'List a bounded workspace tree; root scans skip dependencies and build output, while an explicit subdirectory includes them. Protected paths and symlinks are always excluded.',
       effect: 'read',
       parallel: true,
       parameters: Type.Object({ path: Type.Optional(Type.String()) }),
       execute: async ({ path: input = '.' }, { signal }) => {
-        const files = await walkFiles(cwd, input, signal)
-        return files.join('\n') + (files.length === 5000 ? '\n[File limit reached; narrow the path]' : '')
+        const { files, capped } = await walkFiles(cwd, input, signal)
+        return files.join('\n') + (capped ? '\n[File limit reached; narrow the path]' : '')
       }
     },
     {
       name: 'search',
-      description: 'Search a literal string in workspace text and return bounded file:line matches.',
+      description: 'Search literal text in workspace files up to 2 MiB each; return at most 200 matching lines with 500-character previews and coverage notices. Root scans skip dependency/build trees; explicit subdirectories include their dependency/build children. Protected paths and symlinks are always excluded.',
       effect: 'read',
       parallel: true,
       parameters: Type.Object({ query: Type.String({ minLength: 1 }), path: Type.Optional(Type.String()) }),
-      execute: async ({ query, path: input = '.' }, { signal }) => {
-        const results = []
-        const files = await walkFiles(cwd, input, signal)
-        for (const entry of files) {
-          signal.throwIfAborted()
-          const file = await resolveFile(cwd, entry)
-          if ((await stat(file)).size > 256 * 1024) continue
-          let text
-          try { text = await readText(file, 256 * 1024) } catch (error) {
-            if (['LOOM_BINARY_FILE', 'LOOM_TEXT_LIMIT'].includes(error.code)) continue
-            throw error
-          }
-          for (const [index, line] of text.split('\n').entries()) {
-            if (line.includes(query)) results.push(`${entry}:${index + 1}: ${line.slice(0, 500)}`)
-            if (results.length >= 200) return `${results.join('\n')}\n[Match limit reached; narrow the search]`
-          }
-        }
-        const summary = results.join('\n') || 'No matches'
-        return summary + (files.length === 5000 ? '\n[File limit reached; only scanned files were searched; narrow the path]' : '')
-      }
+      execute: async ({ query, path: input = '.' }, { signal }) => searchFiles(cwd, input, query, signal)
     },
     {
       name: 'write_file',
@@ -127,20 +108,76 @@ export function fileTools (cwd, session) {
 async function walkFiles (cwd, input, signal) {
   cwd = await realpath(cwd)
   const first = await resolveFile(cwd, input)
-  if ((await stat(first)).isFile()) return [path.relative(cwd, first)]
+  const excluded = { generated: 0, protected: 0, symlinks: 0, paths: [] }
+  if ((await stat(first)).isFile()) return { files: [path.relative(cwd, first)], capped: false, excluded }
+  const rootScan = first === cwd
   const pending = [first]
   const files = []
   while (pending.length && files.length < 5000) {
     signal.throwIfAborted()
     for (const entry of await readdir(pending.pop(), { withFileTypes: true })) {
-      if (skippedDirectories.has(entry.name) || isCredentialPath(entry.name)) continue
+      if (protectedNames.includes(entry.name) || isCredentialPath(entry.name)) { excluded.protected++; continue }
+      if (entry.isSymbolicLink()) { excluded.symlinks++; continue }
       const file = path.join(entry.parentPath, entry.name)
+      if (rootScan && entry.isDirectory() && skippedDirectories.has(entry.name)) {
+        excluded.generated++
+        if (excluded.paths.length < 5) excluded.paths.push(path.relative(cwd, file))
+        continue
+      }
       if (entry.isDirectory()) pending.push(file)
       if (entry.isFile()) files.push(path.relative(cwd, file))
       if (files.length === 5000) break
     }
   }
-  return files.sort()
+  return { files: files.sort(), capped: files.length === 5000, excluded }
+}
+
+// searchFiles searches bounded text while retaining coverage failures and actionable truncation notices.
+async function searchFiles (cwd, input, query, signal) {
+  const { files, capped, excluded } = await walkFiles(cwd, input, signal)
+  const results = []
+  const skipped = []
+  let skippedCount = 0
+  let scanned = 0
+  let limited = false
+  let shortened = false
+  for (const entry of files) {
+    signal.throwIfAborted()
+    let text
+    try {
+      text = await readText(await resolveFile(cwd, entry))
+    } catch (error) {
+      signal.throwIfAborted()
+      skippedCount++
+      const reason = error.code === 'LOOM_TEXT_LIMIT' ? 'exceeds 2 MiB' : error.code === 'LOOM_BINARY_FILE' ? 'binary content' : 'unreadable or no longer an allowed regular file'
+      if (skipped.length < 5) skipped.push(`${entry}: ${reason}`)
+      continue
+    }
+    scanned++
+    for (const [index, line] of text.split('\n').entries()) {
+      signal.throwIfAborted()
+      const match = line.indexOf(query)
+      if (match < 0) continue
+      if (results.length === 200) { limited = true; break }
+      const start = Math.max(0, match - 100)
+      const end = start + 500
+      const truncated = start > 0 || end < line.length
+      shortened ||= truncated
+      results.push(`${entry}:${index + 1}: ${start ? '[…]' : ''}${line.slice(start, end)}${end < line.length ? '[…]' : ''}`)
+    }
+    if (limited) break
+  }
+  const excludedCount = excluded.generated + excluded.protected + excluded.symlinks
+  const incomplete = capped || limited || skippedCount > 0 || excludedCount > 0
+  const summary = results.join('\n') || (incomplete ? 'No matches in successfully searched files; coverage is incomplete.' : 'No matches in searched files.')
+  const notices = [`[Coverage: ${incomplete ? 'incomplete' : 'complete within traversal scope'}; read ${scanned}/${files.length} enumerated files; skipped ${skippedCount}.]`]
+  if (excludedCount) notices.push(`[Excluded ${excludedCount} traversal entries: ${excluded.generated} dependency/build directories, ${excluded.protected} protected paths, ${excluded.symlinks} symlinks; exclusions are not evidence of absence.]`)
+  if (excluded.generated) notices.push(`[Dependency/build paths omitted (up to 5 shown): ${excluded.paths.join(', ')}. Pass a specific allowed subdirectory to include its build output, or a specific allowed file. Protected paths and traversed symlinks remain excluded.]`)
+  if (capped) notices.push('[File limit reached (5000); narrow the path. Remaining files were not enumerated.]')
+  if (limited) notices.push('[Match limit reached (200); remaining lines/files were not searched. Narrow the query or path.]')
+  if (shortened) notices.push('[Matching lines shortened to 500-character previews near the match; use read_file at the reported line for context.]')
+  if (skippedCount) notices.push(`[Skipped files (up to 5 shown):\n${skipped.join('\n')}\nUse a permitted shell search for oversized files, or resolve access/path issues. Do not infer absence from skipped files.]`)
+  return `${summary}\n\n${notices.join('\n')}`
 }
 
 // saveFile writes a checkpoint before replacing a version-checked file and records the resulting hash.

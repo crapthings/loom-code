@@ -12,6 +12,7 @@ export function createModel ({ provider, model: id = defaultModel, reasoning = '
   if (!model) throw new Error(`Unknown model ${defaultProvider}/${id}; use --models to inspect the catalog`)
   return {
     label: `${defaultProvider}/${id}`,
+    input: model.input,
     contextWindow: model.contextWindow,
     maxOutputTokens: model.maxTokens,
     complete: async ({ system, messages, tools }, { signal, maxTokens, onDelta, onRetry = () => {} }) => {

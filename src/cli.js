@@ -12,6 +12,7 @@ import { validateMode } from './core/modes.js'
 import { sandboxStatus } from './execution/executor.js'
 import { LanguagePreferences } from './ui/preferences.js'
 import { createDecisionModel, defaultDecisionModel, listDecisionModels } from './model/decision.js'
+import { CuaComputer } from './execution/cua.js'
 
 // parseOptions validates command-line configuration before opening a session or entering raw mode.
 export function parseOptions (args, env = process.env) {
@@ -30,7 +31,10 @@ export function parseOptions (args, env = process.env) {
       print: { type: 'string' },
       json: { type: 'boolean', default: false },
       models: { type: 'boolean', default: false },
-      verify: { type: 'string', default: 'off' },
+      verify: { type: 'string', default: 'auto' },
+      supervise: { type: 'string', default: 'auto' },
+      computer: { type: 'string', default: 'off' },
+      'cua-driver': { type: 'string' },
       'decision-model': { type: 'string' },
       'decision-models': { type: 'boolean', default: false },
       resume: { type: 'boolean', default: false },
@@ -48,7 +52,10 @@ export function parseOptions (args, env = process.env) {
   if (values.list && (values.session || values.resume || values.print !== undefined)) throw new Error('--list cannot be combined with execution or session selection')
   if (values.resume && !resumeCommand && !values.session) throw new Error('--resume requires --session ID; use loom resume to choose a session')
   validateMode(values.mode)
-  if (!['off', 'shadow'].includes(values.verify)) throw new Error('--verify must be off or shadow')
+  if (!['auto', 'off', 'shadow'].includes(values.verify)) throw new Error('--verify must be auto, off or shadow')
+  if (!['auto', 'off'].includes(values.supervise)) throw new Error('--supervise must be auto or off')
+  if (!['off', 'cua'].includes(values.computer)) throw new Error('--computer must be off or cua')
+  if (values['cua-driver'] !== undefined && (!values['cua-driver'].trim() || values.computer !== 'cua')) throw new Error('--cua-driver requires --computer cua and a nonempty executable path')
   if (!['required', 'off'].includes(values.sandbox)) throw new Error('--sandbox must be required or off')
   const steps = values.steps === undefined ? Infinity : Number(values.steps)
   if (values.steps !== undefined && (!Number.isInteger(steps) || steps < 1 || steps > 500)) throw new Error('--steps must be an integer from 1 to 500')
@@ -68,8 +75,11 @@ Usage: loom [options]
   --cwd DIRECTORY          Workspace (default: current directory)
   --model ID               Model identifier (or LOOM_MODEL)
   --models                 List Vercel AI Gateway chat models
-  --verify off|shadow      Optional completion evaluation (default: off; shadow records only)
-  --decision-model ID      Classifier identifier (or LOOM_DECISION_MODEL)
+  --verify auto|off|shadow Completion review (default: auto; shadow records only)
+  --supervise auto|off     Independent progress checks during long investigations (default: auto)
+  --computer off|cua       Enable Cua host desktop tools (default: off)
+  --cua-driver PATH        Cua Driver executable (default: cua-driver on PATH)
+  --decision-model ID      Classifier for progress/completion (or LOOM_DECISION_MODEL)
   --decision-models        List decision models without API calls
   --mode ask|edit|auto|plan Initial permissions; switch with /mode in the TUI
   --sandbox required|off   Mandatory OS sandbox (default) or explicit host execution
@@ -80,7 +90,7 @@ Usage: loom [options]
   --list                   List workspace sessions; --json for JSON (loom resume)
   --steps N                Shared model-call allowance, 1–500 (default: unlimited)
   --reasoning LEVEL        off|minimal|low|medium|high|xhigh
-  --print TASK             Run without a TUI; shell approval is denied
+  --print TASK             Run without a TUI; required approvals are denied
   --json                   Stream JSON events in headless mode
   --help                   Show this help
 
@@ -91,6 +101,8 @@ Default: Vercel AI Gateway / deepseek/deepseek-v4.1-flash; set AI_GATEWAY_API_KE
 LOOM_MODEL overrides the default model.
 Shell commands require approval in ask/edit; auto permits host execution without prompts.
 Shell sandbox defaults to required, with network denied and no unsandboxed fallback.
+Computer tools operate on the host outside that shell sandbox; input requires approval in ask/edit.
+Install Cua Driver 0.28+ and configure OS permissions before enabling --computer cua.
 `
 
 // main builds one runtime for either the terminal interface or the headless event stream.
@@ -131,7 +143,7 @@ export async function main (args = process.argv.slice(2)) {
   if (options.json && !headless) throw new Error('--json requires --print or headless --resume')
   if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error('Interactive mode needs a terminal; use --print TASK')
   const model = createModel(options)
-  const decisionModel = options.verify === 'shadow' ? createDecisionModel({ model: options.decisionModel }) : undefined
+  const classifier = options.verify !== 'off' || options.supervise === 'auto' ? createDecisionModel({ model: options.decisionModel }) : undefined
   const language = headless ? 'en' : await preferences.load()
   const session = await Session.open(cwd, options.session, { existing: options.resumeCommand })
   let agent
@@ -144,9 +156,13 @@ export async function main (args = process.argv.slice(2)) {
       if (options.json) process.stdout.write(`${JSON.stringify(event)}\n`)
       else if (event.type === 'assistant.end' && !event.child) process.stdout.write(`${safeText(event.response.content.filter(part => part.type === 'text').map(part => part.text).join('\n'))}\n`)
       else if (event.type === 'error') process.stderr.write(`${safeText(event.text)}\n`)
+      else if (event.type === 'progress.review') process.stderr.write(`${translate(language, 'progress.label')}: ${event.reasons.map(reason => translate(language, `progress.${reason}`)).join(' ')} ${translate(language, 'progress.action')}\n`)
+      else if (event.type === 'progress.assessment.end') process.stderr.write(`${translate(language, 'assessment.label')}: ${event.status === 'completed' ? translate(language, `assessment.${event.verdict}`) : translate(language, 'assessment.unavailable')}${event.action ? `; ${translate(language, `assessment.action.${event.action}`)}` : ''}\n`)
+      else if (event.type === 'completion.assessment.end') process.stderr.write(`${translate(language, 'completion.label')}: ${translate(language, `completion.${event.outcome}`)}\n`)
       else if (event.type === 'resume.skipped') process.stdout.write(`${event.text}\n`)
     }
-    agent = new Agent({ cwd, session, model, decisionModel, mode: options.mode, sandbox: options.sandbox, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
+    const computer = options.computer === 'cua' ? new CuaComputer({ command: options['cua-driver'] }) : undefined
+    agent = new Agent({ cwd, session, model, computer, decisionModel: options.verify !== 'off' ? classifier : undefined, verification: options.verify, progressModel: options.supervise === 'auto' ? classifier : undefined, mode: options.mode, sandbox: options.sandbox, steps: options.steps, emit, approve: app ? request => app.approve(request) : async () => false })
     app?.bind(agent)
     await agent.initialize()
     process.on('SIGINT', shutdown)
